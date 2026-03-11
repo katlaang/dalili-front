@@ -1,0 +1,14 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "expo-av": ["node_modules/expo-av/build/index"]
+    },
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}

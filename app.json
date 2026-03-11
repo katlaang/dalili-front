@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Dalili Frontend",
+    "slug": "dalili-frontend",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "dalili",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Dalili uses microphone access for ambient clinical documentation."
+      }
+    },
+    "android": {
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
