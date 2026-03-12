@@ -553,3 +553,49 @@ export interface FacilityWorkflowConfig {
   updatedAt?: string;
   updatedBy?: string;
 }
+
+export interface AdminStaffAccount {
+  userId: string;
+  username: string;
+  email?: string | null;
+  fullName: string;
+  role: string;
+  actorType: string;
+  active: boolean;
+}
+
+export interface AdminActiveSession {
+  sessionId: string;
+  userId: string;
+  username?: string | null;
+  fullName?: string | null;
+  role?: string | null;
+  actorType: string;
+  createdAt: string;
+  lastActivity: string;
+}
+
+export interface AdminAuditEvent {
+  eventId: string;
+  timestamp: string;
+  eventType: string;
+  sessionId: string;
+  actorId: string;
+  deviceId: string;
+  patientContextRedacted: boolean;
+}
+
+export interface FrontDeskPatientLookup {
+  patientId: string;
+  patientUuid: string;
+  fullName: string;
+  dateOfBirth: string;
+  hasPendingAppointment: boolean;
+}
+
+export interface CurrentUserProfile {
+  userId: string;
+  username: string;
+  fullName: string;
+  role: string;
+}

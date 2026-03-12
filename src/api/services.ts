@@ -1,6 +1,9 @@
 import { ApiError, authedRequest, request } from "./client";
 import type {
   AccessResolution,
+  AdminActiveSession,
+  AdminAuditEvent,
+  AdminStaffAccount,
   AppointmentCheckInResponse,
   AppointmentView,
   AiDraftGenerationResult,
@@ -9,11 +12,13 @@ import type {
   CarePlanAgreementResult,
   CarePlanSuggestionResult,
   ContraindicationResponse,
+  CurrentUserProfile,
   EncounterPreview,
   EncounterNoteView,
   EncounterResponse,
   EncounterSummary,
   FacilityWorkflowConfig,
+  FrontDeskPatientLookup,
   HealthResponse,
   LabResultView,
   KioskCheckInResponse,
@@ -97,18 +102,38 @@ export const authApi = {
       method: "POST"
     }),
 
+  getCurrentProfile: (ctx: ApiContext) =>
+    authedRequest<CurrentUserProfile>(ctx, "/api/auth/me"),
+
   bootstrapSuperAdmin: (
     baseUrl: string,
-    payload: { fullName: string; password: string; company: string }
+    payload: {
+      username: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      password: string;
+      company: string;
+    }
   ) =>
     request<{ userId: string; username: string; message: string }>(baseUrl, "/api/auth/super-admin/bootstrap", {
       method: "POST",
       body: payload
     }),
 
+  getSuperAdminBootstrapStatus: (baseUrl: string) =>
+    request<{ bootstrapAllowed: boolean }>(baseUrl, "/api/auth/super-admin/bootstrap-status"),
+
   registerAdmin: (
     ctx: ApiContext,
-    payload: { fullName: string; password: string; company: string }
+    payload: {
+      username: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      password: string;
+      company: string;
+    }
   ) =>
     authedRequest<{ userId: string; username: string; message: string }>(ctx, "/api/auth/admin/register", {
       method: "POST",
@@ -117,9 +142,25 @@ export const authApi = {
 
   registerStaff: (
     ctx: ApiContext,
-    payload: { username: string; password: string; fullName: string; role: string }
+    payload: {
+      username: string;
+      password: string;
+      firstName: string;
+      lastName: string;
+      email: string;
+      role: string;
+    }
   ) =>
     authedRequest<{ userId: string; message: string }>(ctx, "/api/auth/staff/register", {
+      method: "POST",
+      body: payload
+    }),
+
+  registerPatientUser: (
+    ctx: ApiContext,
+    payload: { username: string; password: string; patientId: string }
+  ) =>
+    authedRequest<{ userId: string; message: string }>(ctx, "/api/auth/patient/register", {
       method: "POST",
       body: payload
     }),
@@ -132,6 +173,20 @@ export const authApi = {
       method: "POST",
       body: payload
     })
+};
+
+export const adminPortalApi = {
+  getStaffAccounts: (ctx: ApiContext) =>
+    authedRequest<AdminStaffAccount[]>(ctx, "/api/admin/super/staff-accounts"),
+
+  getActiveSessions: (ctx: ApiContext) =>
+    authedRequest<AdminActiveSession[]>(ctx, "/api/admin/super/active-sessions"),
+
+  getAuditEvents: (ctx: ApiContext, limit = 100) =>
+    authedRequest<AdminAuditEvent[]>(
+      ctx,
+      `/api/admin/super/audit-events?limit=${encodeURIComponent(String(limit))}`
+    )
 };
 
 export const healthApi = {
@@ -186,6 +241,14 @@ export const patientApi = {
     authedRequest<PatientResponse>(ctx, `/api/patients/${patientId}/consent`, {
       method: "POST"
     })
+};
+
+export const frontDeskApi = {
+  lookupPatientByMrnAndDob: (ctx: ApiContext, mrn: string, dateOfBirth: string) =>
+    authedRequest<FrontDeskPatientLookup>(
+      ctx,
+      `/api/frontdesk/patient-lookup?mrn=${encodeURIComponent(mrn)}&dateOfBirth=${encodeURIComponent(dateOfBirth)}`
+    )
 };
 
 export const patientPortalApi = {

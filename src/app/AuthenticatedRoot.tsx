@@ -13,6 +13,7 @@ import { useCheckInDeepLink } from "../hooks/useCheckInDeepLink";
 export function AuthenticatedRoot() {
   const { actor, username, apiContext, signOut, bootstrapped } = useSession();
   const [message, setMessage] = useState<string | null>(null);
+  const [staffRequestedTab, setStaffRequestedTab] = useState<"profile" | null>(null);
   const checkInDeepLinkPrefill = useCheckInDeepLink();
 
   const title = useMemo(() => {
@@ -62,13 +63,31 @@ export function AuthenticatedRoot() {
   };
 
   return (
-    <AppShell
-      title={title}
-      subtitle={subtitle}
-      rightAction={actor === "KIOSK" ? undefined : <ActionButton label="Logout" onPress={logout} variant="ghost" />}
-    >
-      <MessageBanner message={message} tone="success" />
-      {actor === "STAFF" ? <StaffWorkspaceScreen /> : null}
+      <AppShell
+        title={title}
+        subtitle={subtitle}
+        rightAction={
+          actor === "KIOSK" ? undefined : (
+            <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+              {actor === "STAFF" ? (
+                <ActionButton
+                  label="Profile"
+                  onPress={() => setStaffRequestedTab("profile")}
+                  variant="ghost"
+                />
+              ) : null}
+              <ActionButton label="Logout" onPress={logout} variant="ghost" />
+            </View>
+          )
+        }
+      >
+        <MessageBanner message={message} tone="success" />
+      {actor === "STAFF" ? (
+        <StaffWorkspaceScreen
+          requestedTab={staffRequestedTab}
+          onRequestedTabHandled={() => setStaffRequestedTab(null)}
+        />
+      ) : null}
       {actor === "KIOSK" ? <KioskWorkspaceScreen /> : null}
       {actor === "PATIENT" ? <PatientWorkspaceScreen deepLinkCheckInPrefill={checkInDeepLinkPrefill} /> : null}
     </AppShell>

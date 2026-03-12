@@ -1,16 +1,30 @@
 import React, { useMemo, useState } from "react";
-import { authApi } from "../../api/services";
+import { adminPortalApi, authApi } from "../../api/services";
 import { ActionButton, Card, ChoiceChips, InlineActions, InputField, JsonPanel, MessageBanner } from "../../components/ui";
 import { DEFAULT_KIOSK_DEVICE_ID, DEFAULT_KIOSK_DEVICE_SECRET } from "../../config/env";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 
-const staffRoleOptions = ["RECEPTIONIST", "NURSE", "PHYSICIAN", "PHARMACIST", "LAB_TECHNICIAN"] as const;
+type ProfileType = "STAFF" | "CONSULTANT" | "PATIENT";
+type StaffRoleOption = "NURSE" | "RECEPTIONIST";
+
+const profileTypeOptions: ProfileType[] = ["STAFF", "CONSULTANT", "PATIENT"];
+const staffRoleOptions: StaffRoleOption[] = ["NURSE", "RECEPTIONIST"];
+const clinicOptions = ["Dalili Health Clinic", "Sunrise Community Clinic"] as const;
+
+function hasPrefix(value: string, prefix: string) {
+  return value.trim().toUpperCase().startsWith(prefix.toUpperCase());
+}
 
 export function AdminScreen() {
   const { apiContext, role } = useSession();
 
-  const [adminFullName, setAdminFullName] = useState("");
+  const [profileType, setProfileType] = useState<ProfileType>("STAFF");
+
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminFirstName, setAdminFirstName] = useState("");
+  const [adminLastName, setAdminLastName] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminCompany, setAdminCompany] = useState("Dalili Health Clinic");
   const [adminResult, setAdminResult] = useState<unknown>(null);
@@ -18,9 +32,12 @@ export function AdminScreen() {
   const [adminTone, setAdminTone] = useState<"error" | "success">("success");
 
   const [staffUsername, setStaffUsername] = useState("");
-  const [staffFullName, setStaffFullName] = useState("");
+  const [staffFirstName, setStaffFirstName] = useState("");
+  const [staffLastName, setStaffLastName] = useState("");
+  const [staffEmail, setStaffEmail] = useState("");
   const [staffPassword, setStaffPassword] = useState("");
-  const [staffRole, setStaffRole] = useState<(typeof staffRoleOptions)[number]>("NURSE");
+  const [staffRole, setStaffRole] = useState<StaffRoleOption>("NURSE");
+  const [patientProfileId, setPatientProfileId] = useState("");
   const [staffResult, setStaffResult] = useState<unknown>(null);
   const [staffMessage, setStaffMessage] = useState<string | null>(null);
   const [staffTone, setStaffTone] = useState<"error" | "success">("success");
@@ -32,8 +49,18 @@ export function AdminScreen() {
   const [kioskMessage, setKioskMessage] = useState<string | null>(null);
   const [kioskTone, setKioskTone] = useState<"error" | "success">("success");
 
+  const [staffAccounts, setStaffAccounts] = useState<unknown>(null);
+  const [activeSessions, setActiveSessions] = useState<unknown>(null);
+  const [auditEvents, setAuditEvents] = useState<unknown>(null);
+  const [monitoringMessage, setMonitoringMessage] = useState<string | null>(null);
+  const [monitoringTone, setMonitoringTone] = useState<"error" | "success">("success");
+
   const operatorRole = (role || "").toUpperCase();
   const canCreateAdmins = useMemo(() => operatorRole === "SUPER_ADMIN", [operatorRole]);
+  const canViewIdentityData = useMemo(() => operatorRole === "SUPER_ADMIN", [operatorRole]);
+
+  const effectiveStaffRole = profileType === "CONSULTANT" ? "PHYSICIAN" : staffRole;
+  const requiredStaffPrefix = effectiveStaffRole === "PHYSICIAN" ? "CL" : effectiveStaffRole === "NURSE" ? "NS" : "RC";
 
   if (!apiContext) {
     return (
@@ -46,14 +73,20 @@ export function AdminScreen() {
   const registerAdmin = async () => {
     try {
       setAdminMessage(null);
+      if (!hasPrefix(adminUsername, "AD")) {
+        throw new Error("Admin usernames must start with AD.");
+      }
       const response = await authApi.registerAdmin(apiContext, {
-        fullName: adminFullName.trim(),
+        username: adminUsername.trim(),
+        firstName: adminFirstName.trim(),
+        lastName: adminLastName.trim(),
+        email: adminEmail.trim(),
         password: adminPassword,
         company: adminCompany.trim()
       });
       setAdminResult(response);
       setAdminPassword("");
-      setAdminMessage(`Admin created. Username: ${response.username}`);
+      setAdminMessage(`Admin profile created. Username: ${response.username}`);
       setAdminTone("success");
     } catch (error) {
       setAdminMessage(toErrorMessage(error));
@@ -61,18 +94,42 @@ export function AdminScreen() {
     }
   };
 
-  const registerStaff = async () => {
+  const registerStaffOrConsultant = async () => {
     try {
       setStaffMessage(null);
+      if (!hasPrefix(staffUsername, requiredStaffPrefix)) {
+        throw new Error(`Username must start with ${requiredStaffPrefix}.`);
+      }
+
       const response = await authApi.registerStaff(apiContext, {
         username: staffUsername.trim(),
         password: staffPassword,
-        fullName: staffFullName.trim(),
-        role: staffRole
+        firstName: staffFirstName.trim(),
+        lastName: staffLastName.trim(),
+        email: staffEmail.trim(),
+        role: effectiveStaffRole
       });
       setStaffResult(response);
       setStaffPassword("");
-      setStaffMessage(`Staff user created: ${staffUsername.trim()} (${staffRole})`);
+      setStaffMessage(`Profile created: ${staffUsername.trim()} (${effectiveStaffRole}).`);
+      setStaffTone("success");
+    } catch (error) {
+      setStaffMessage(toErrorMessage(error));
+      setStaffTone("error");
+    }
+  };
+
+  const registerPatientPortalUser = async () => {
+    try {
+      setStaffMessage(null);
+      const response = await authApi.registerPatientUser(apiContext, {
+        username: staffUsername.trim(),
+        password: staffPassword,
+        patientId: patientProfileId.trim()
+      });
+      setStaffResult(response);
+      setStaffPassword("");
+      setStaffMessage("Patient portal profile created.");
       setStaffTone("success");
     } catch (error) {
       setStaffMessage(toErrorMessage(error));
@@ -97,19 +154,131 @@ export function AdminScreen() {
     }
   };
 
+  const loadStaffAccounts = async () => {
+    try {
+      const response = await adminPortalApi.getStaffAccounts(apiContext);
+      setStaffAccounts(response);
+      setMonitoringMessage("Non-patient account list loaded.");
+      setMonitoringTone("success");
+    } catch (error) {
+      setMonitoringMessage(toErrorMessage(error));
+      setMonitoringTone("error");
+    }
+  };
+
+  const loadActiveSessions = async () => {
+    try {
+      const response = await adminPortalApi.getActiveSessions(apiContext);
+      setActiveSessions(response);
+      setMonitoringMessage("Active non-patient sessions loaded.");
+      setMonitoringTone("success");
+    } catch (error) {
+      setMonitoringMessage(toErrorMessage(error));
+      setMonitoringTone("error");
+    }
+  };
+
+  const loadAuditEvents = async () => {
+    try {
+      const response = await adminPortalApi.getAuditEvents(apiContext, 100);
+      setAuditEvents(response);
+      setMonitoringMessage("Audit logs loaded (patient details redacted).");
+      setMonitoringTone("success");
+    } catch (error) {
+      setMonitoringMessage(toErrorMessage(error));
+      setMonitoringTone("error");
+    }
+  };
+
   return (
     <>
-      <Card title="Test Flow Setup">
-        <JsonPanel
-          value={{
-            step1: "Register one kiosk device in 'Kiosk Device Registration'.",
-            step2: "Register at least one NURSE and one PHYSICIAN in 'Staff Registration'.",
-            step3: "Open kiosk in one browser profile/tab and complete check-in to issue queue number.",
-            step4: "Open staff workspace in another profile (or incognito) as NURSE to view waiting queue.",
-            step5: "Switch role view to PHYSICIAN and open Encounters to test ambient AI on selected patient.",
-            note: "Web tabs in one browser profile share stored session. Use separate profiles/incognito to keep kiosk and staff logged in at the same time."
-          }}
+      <Card title="Admin Portal">
+        <MessageBanner
+          message="Create staff, consultant, and patient accounts. Identity and audit logs are available in this portal."
+          tone="info"
         />
+      </Card>
+
+      <Card title="Profile Creation">
+        <ChoiceChips
+          label="Profile Type"
+          options={profileTypeOptions}
+          value={profileType}
+          onChange={(value) => setProfileType(value as ProfileType)}
+        />
+
+        <InputField
+          label="Username"
+          value={staffUsername}
+          onChangeText={setStaffUsername}
+          placeholder={profileType === "PATIENT" ? "PT-..." : `${requiredStaffPrefix}-...`}
+        />
+        {profileType === "STAFF" ? (
+          <MessageBanner message="Nurse usernames must start with NS. Receptionist usernames must start with RC." tone="info" />
+        ) : null}
+        {profileType === "CONSULTANT" ? (
+          <MessageBanner message="Clinician usernames must start with CL." tone="info" />
+        ) : null}
+        <InputField label="Temporary Password" value={staffPassword} onChangeText={setStaffPassword} secureTextEntry />
+
+        {profileType === "PATIENT" ? (
+          <>
+            <InputField
+              label="Patient UUID"
+              value={patientProfileId}
+              onChangeText={setPatientProfileId}
+              placeholder="Paste existing patient UUID"
+            />
+            <InlineActions>
+              <ActionButton label="Create Patient Portal Profile" onPress={registerPatientPortalUser} />
+            </InlineActions>
+          </>
+        ) : (
+          <>
+            <InputField label="First Name" value={staffFirstName} onChangeText={setStaffFirstName} placeholder="First name" />
+            <InputField label="Last Name" value={staffLastName} onChangeText={setStaffLastName} placeholder="Last name" />
+            <InputField label="Email" value={staffEmail} onChangeText={setStaffEmail} placeholder="name@clinic.com" />
+            {profileType === "STAFF" ? (
+              <ChoiceChips
+                label="Staff Role"
+                options={staffRoleOptions}
+                value={staffRole}
+                onChange={(value) => setStaffRole(value as StaffRoleOption)}
+              />
+            ) : (
+              <ChoiceChips label="Consultant Role" options={["CLINICIAN"]} value="CLINICIAN" onChange={() => undefined} />
+            )}
+            <InlineActions>
+              <ActionButton label={`Create ${profileType} Profile`} onPress={registerStaffOrConsultant} />
+            </InlineActions>
+          </>
+        )}
+
+        <MessageBanner message={staffMessage} tone={staffTone} />
+      </Card>
+
+      <Card title="Admin Registration">
+        <MessageBanner
+          message={canCreateAdmins ? "Create admin profiles (role is fixed to ADMIN)." : "Current account cannot create admin profiles."}
+          tone={canCreateAdmins ? "success" : "error"}
+        />
+        <MessageBanner message="Admin usernames must start with AD." tone="info" />
+        <InputField label="Admin Username (AD...)" value={adminUsername} onChangeText={setAdminUsername} placeholder="AD-001" />
+        <InputField label="Admin First Name" value={adminFirstName} onChangeText={setAdminFirstName} placeholder="First name" />
+        <InputField label="Admin Last Name" value={adminLastName} onChangeText={setAdminLastName} placeholder="Last name" />
+        <InputField label="Admin Email" value={adminEmail} onChangeText={setAdminEmail} placeholder="admin@clinic.com" />
+        <InputField label="Temporary Password" value={adminPassword} onChangeText={setAdminPassword} secureTextEntry />
+        <ChoiceChips
+          label="Company / Clinic Name"
+          options={clinicOptions}
+          value={adminCompany}
+          onChange={(value) => setAdminCompany(value)}
+        />
+        <InputField label="Company / Clinic Name" value={adminCompany} onChangeText={setAdminCompany} />
+        <InlineActions>
+          <ActionButton label="Create Admin Profile" onPress={registerAdmin} disabled={!canCreateAdmins} />
+        </InlineActions>
+        <MessageBanner message={adminMessage} tone={adminTone} />
       </Card>
 
       <Card title="Kiosk Device Registration">
@@ -133,30 +302,16 @@ export function AdminScreen() {
         <MessageBanner message={kioskMessage} tone={kioskTone} />
       </Card>
 
-      <Card title="Staff Registration">
-        <InputField label="Username" value={staffUsername} onChangeText={setStaffUsername} placeholder="nurse.anna" />
-        <InputField label="Full Name" value={staffFullName} onChangeText={setStaffFullName} placeholder="Anna Nurse" />
-        <InputField label="Temporary Password" value={staffPassword} onChangeText={setStaffPassword} secureTextEntry />
-        <ChoiceChips label="Role" options={staffRoleOptions} value={staffRole} onChange={(value) => setStaffRole(value as (typeof staffRoleOptions)[number])} />
-        <InlineActions>
-          <ActionButton label="Register Staff User" onPress={registerStaff} />
-        </InlineActions>
-        <MessageBanner message={staffMessage} tone={staffTone} />
-      </Card>
-
-      <Card title="Admin Registration">
-        <MessageBanner
-          message={canCreateAdmins ? "Super admin privileges detected." : "Only SUPER_ADMIN can create ADMIN accounts."}
-          tone={canCreateAdmins ? "success" : "error"}
-        />
-        <InputField label="Admin Full Name" value={adminFullName} onChangeText={setAdminFullName} placeholder="Jane Doe" />
-        <InputField label="Temporary Password" value={adminPassword} onChangeText={setAdminPassword} secureTextEntry />
-        <InputField label="Company / Clinic Name" value={adminCompany} onChangeText={setAdminCompany} />
-        <InlineActions>
-          <ActionButton label="Register Admin" onPress={registerAdmin} disabled={!canCreateAdmins} />
-        </InlineActions>
-        <MessageBanner message={adminMessage} tone={adminTone} />
-      </Card>
+      {canViewIdentityData ? (
+        <Card title="Identity & Audit">
+          <InlineActions>
+            <ActionButton label="Load Staff Accounts" onPress={loadStaffAccounts} />
+            <ActionButton label="Load Active Sessions" onPress={loadActiveSessions} variant="secondary" />
+            <ActionButton label="Load Audit Logs" onPress={loadAuditEvents} variant="secondary" />
+          </InlineActions>
+          <MessageBanner message={monitoringMessage} tone={monitoringTone} />
+        </Card>
+      ) : null}
 
       {kioskResult ? (
         <Card title="Kiosk Registration Result">
@@ -164,13 +319,28 @@ export function AdminScreen() {
         </Card>
       ) : null}
       {staffResult ? (
-        <Card title="Staff Registration Result">
+        <Card title="Profile Creation Result">
           <JsonPanel value={staffResult} />
         </Card>
       ) : null}
       {adminResult ? (
         <Card title="Admin Registration Result">
           <JsonPanel value={adminResult} />
+        </Card>
+      ) : null}
+      {staffAccounts ? (
+        <Card title="Non-Patient Accounts">
+          <JsonPanel value={staffAccounts} />
+        </Card>
+      ) : null}
+      {activeSessions ? (
+        <Card title="Active Non-Patient Sessions">
+          <JsonPanel value={activeSessions} />
+        </Card>
+      ) : null}
+      {auditEvents ? (
+        <Card title="Audit Logs (Redacted)">
+          <JsonPanel value={auditEvents} />
         </Card>
       ) : null}
     </>

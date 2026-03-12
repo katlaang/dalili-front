@@ -64,6 +64,7 @@ interface InputProps {
   placeholder?: string;
   secureTextEntry?: boolean;
   multiline?: boolean;
+  onSubmitEditing?: () => void;
 }
 
 export function InputField({
@@ -72,7 +73,8 @@ export function InputField({
   onChangeText,
   placeholder,
   secureTextEntry,
-  multiline
+  multiline,
+  onSubmitEditing
 }: InputProps) {
   return (
     <View style={styles.field}>
@@ -84,6 +86,7 @@ export function InputField({
         placeholderTextColor={colors.textMuted}
         secureTextEntry={secureTextEntry}
         multiline={multiline}
+        onSubmitEditing={onSubmitEditing ? () => onSubmitEditing() : undefined}
         style={[styles.input, multiline ? styles.inputMultiline : null]}
       />
     </View>

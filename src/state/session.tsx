@@ -26,7 +26,7 @@ type SessionContextValue = SessionState &
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-export function SessionProvider({ children }: { children: React.ReactNode }) {
+export function SessionProvider({ children }: { children?: React.ReactNode }) {
   const [state, setState] = useState<SessionState>({
     bootstrapped: false,
     token: null,

@@ -18,8 +18,10 @@ export function OverviewScreen() {
   const [workflowConfig, setWorkflowConfig] = useState<FacilityWorkflowConfig | null>(null);
   const [workflowDraft, setWorkflowDraft] = useState<FacilityWorkflowConfig | null>(null);
   const [newStaffUsername, setNewStaffUsername] = useState("");
+  const [newStaffFirstName, setNewStaffFirstName] = useState("");
+  const [newStaffLastName, setNewStaffLastName] = useState("");
+  const [newStaffEmail, setNewStaffEmail] = useState("");
   const [newStaffPassword, setNewStaffPassword] = useState("");
-  const [newStaffFullName, setNewStaffFullName] = useState("");
   const [newStaffRole, setNewStaffRole] = useState("RECEPTIONIST");
   const [staffProvisionResult, setStaffProvisionResult] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -112,7 +114,9 @@ export function OverviewScreen() {
       const result = await authApi.registerStaff(apiContext, {
         username: newStaffUsername.trim(),
         password: newStaffPassword,
-        fullName: newStaffFullName,
+        firstName: newStaffFirstName.trim(),
+        lastName: newStaffLastName.trim(),
+        email: newStaffEmail.trim(),
         role: newStaffRole
       });
       setStaffProvisionResult(result);
@@ -233,8 +237,10 @@ export function OverviewScreen() {
       {canProvisionStaff ? (
         <Card title="Staff Provisioning">
           <InputField label="Username" value={newStaffUsername} onChangeText={setNewStaffUsername} />
+          <InputField label="First Name" value={newStaffFirstName} onChangeText={setNewStaffFirstName} />
+          <InputField label="Last Name" value={newStaffLastName} onChangeText={setNewStaffLastName} />
+          <InputField label="Email" value={newStaffEmail} onChangeText={setNewStaffEmail} />
           <InputField label="Password" value={newStaffPassword} onChangeText={setNewStaffPassword} secureTextEntry />
-          <InputField label="Full Name" value={newStaffFullName} onChangeText={setNewStaffFullName} />
           <ChoiceChips label="Role" options={staffRoleOptions} value={newStaffRole} onChange={setNewStaffRole} />
           <InlineActions>
             <ActionButton label="Register Staff User" onPress={registerStaff} />
