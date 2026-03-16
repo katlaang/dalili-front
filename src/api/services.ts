@@ -13,6 +13,7 @@ import type {
   CarePlanSuggestionResult,
   ContraindicationResponse,
   CurrentUserProfile,
+  EncounterAccessLogEntry,
   EncounterPreview,
   EncounterNoteView,
   EncounterResponse,
@@ -596,6 +597,32 @@ export const encounterApi = {
     authedRequest<EncounterResponse>(ctx, `/api/encounters/${encounterId}`),
 
   getMyOpen: (ctx: ApiContext) => authedRequest<EncounterSummary[]>(ctx, "/api/encounters/my/open"),
+
+  logAccess: async (ctx: ApiContext, encounterId: string, accessReason: string) => {
+    const attempts: Array<{ path: string; body: Record<string, string> }> = [
+      { path: `/api/encounters/${encounterId}/access-log`, body: { accessReason } },
+      { path: `/api/encounters/${encounterId}/access-log`, body: { reason: accessReason } },
+      { path: `/api/encounters/${encounterId}/access`, body: { accessReason } },
+      { path: `/api/encounters/${encounterId}/access`, body: { reason: accessReason } },
+    ];
+
+    let lastError: unknown;
+    for (const attempt of attempts) {
+      try {
+        return await authedRequest<EncounterAccessLogEntry>(ctx, attempt.path, {
+          method: "POST",
+          body: attempt.body,
+        });
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof ApiError) || (error.status !== 400 && error.status !== 404)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError;
+  },
 
   recordTranscript: (ctx: ApiContext, encounterId: string, transcript: string) =>
     authedRequest<EncounterResponse>(ctx, `/api/encounters/${encounterId}/transcript`, {

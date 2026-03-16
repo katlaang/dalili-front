@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { facilityApi, queueApi } from "../../api/services";
-import { queueCategoryOptions, queueViewOptions, triageLevelOptions } from "../../config/options";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { facilityApi, patientAppointmentApi, queueApi } from "../../api/services";
+import type { QueueTicket } from "../../api/types";
+import { queueCategoryOptions, triageLevelOptions } from "../../config/options";
 import {
   ActionButton,
   Card,
@@ -8,324 +10,531 @@ import {
   InlineActions,
   InputField,
   JsonPanel,
-  MessageBanner
+  MessageBanner,
+  useTheme,
 } from "../../components/ui";
+import { triagePalette } from "../../constants/theme";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 
+// ─── QUEUE SCREEN ─────────────────────────────────────────────────────────────
+// Two completely separate queues:
+//   • Triage Queue  — nurse calls patients here, performs triage, then sends to Doctor Queue
+//   • Doctor Queue  — physician sees only this queue; label never says "physician queue"
+//
+// FIFO within the Doctor Queue, UNLESS the ticket has an appointment assigned to a
+// specific physician — those rows show "Appointment · HH:MM" label and physician name.
+//
+// Receptionist: can issue tickets and book appointments. Cannot view clinical data.
+// Nurse: sees Triage Queue + can open full triage view per patient.
+// Physician: sees Doctor Queue only; clicking a row opens the encounter workspace.
+
 interface QueueScreenProps {
-  onMoveToTriage?: (ticketId: string) => void;
+  onMoveToTriage?:    (ticketId: string) => void;
   onMoveToEncounter?: (ticketId: string) => void;
+  onOpenMessaging?:   (patientId: string, patientName: string) => void;
+  onBookAppointment?: () => void;
 }
 
-const extractTicketId = (value: unknown): string | null => {
-  if (!value || typeof value !== "object" || !("id" in value)) {
-    return null;
-  }
-  const id = (value as { id?: unknown }).id;
-  return typeof id === "string" ? id : null;
+// ─── helpers ─────────────────────────────────────────────────────────────────
+const formatTime = (iso?: string) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime())
+    ? iso
+    : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
-export function QueueScreen({ onMoveToTriage, onMoveToEncounter }: QueueScreenProps) {
-  const { apiContext, role } = useSession();
-  const isReceptionist = role === "RECEPTIONIST";
-  const [emergencyFlowEnabled, setEmergencyFlowEnabled] = useState(true);
-  const [appointmentFlowEnabled, setAppointmentFlowEnabled] = useState(true);
-  const [queueKind, setQueueKind] = useState<(typeof queueViewOptions)[number]>("waiting");
-  const [queueRows, setQueueRows] = useState<unknown[]>([]);
-  const [queueStats, setQueueStats] = useState<unknown>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [tone, setTone] = useState<"error" | "success">("success");
+const formatDateTime = (iso?: string) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString();
+};
 
-  const [issuePatientId, setIssuePatientId] = useState("");
-  const [issueCategory, setIssueCategory] = useState("GENERAL");
-  const [issueComplaint, setIssueComplaint] = useState("");
-  const [issueEmergency, setIssueEmergency] = useState(false);
+const waitLabel = (mins?: number | null) => {
+  if (mins == null) return "—";
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+};
 
-  const [counterTriage, setCounterTriage] = useState("Triage Room 1");
-  const [counterConsultation, setCounterConsultation] = useState("Consult Room 1");
+type TriageKey = keyof typeof triagePalette;
+const TRIAGE_KEYS = Object.keys(triagePalette) as TriageKey[];
 
-  const [ticketId, setTicketId] = useState("");
-  const [ticketCounter, setTicketCounter] = useState("Desk 1");
-  const [escalationLevel, setEscalationLevel] = useState("ORANGE");
-  const [escalationReason, setEscalationReason] = useState("");
-  const [admissionReason, setAdmissionReason] = useState("");
-  const [outcomePhysicalExam, setOutcomePhysicalExam] = useState("");
-  const [triageOutcome, setTriageOutcome] = useState<unknown>(null);
-  const [latestTicket, setLatestTicket] = useState<unknown>(null);
-  const [handoffClinicianName, setHandoffClinicianName] = useState("");
-  const [handoffClinicianEmployeeId, setHandoffClinicianEmployeeId] = useState("");
-  const [handoffClinicianUserId, setHandoffClinicianUserId] = useState("");
-  const [handoffNotes, setHandoffNotes] = useState("");
-
-  const availableCategoryOptions = useMemo(
-    () =>
-      queueCategoryOptions.filter(
-        (category) =>
-          (emergencyFlowEnabled || category !== "EMERGENCY") &&
-          (appointmentFlowEnabled || category !== "FOLLOW_UP")
-      ),
-    [appointmentFlowEnabled, emergencyFlowEnabled]
+function TriageBadge({ level, scheme }: { level?: string | null; scheme: "dark" | "light" }) {
+  if (!level) return null;
+  const key = (level.toUpperCase().replace(" ", "_")) as TriageKey;
+  const pal = triagePalette[key];
+  if (!pal) return <Text style={{ fontSize: 11, color: "#888" }}>{level}</Text>;
+  return (
+    <View style={[qss.triageBadge, {
+      backgroundColor: scheme === "dark" ? pal.bgDark : pal.bgLight,
+      borderColor: pal.border,
+    }]}>
+      <Text style={{ fontSize: 10, fontWeight: "700", color: scheme === "dark" ? pal.textDark : pal.textLight }}>
+        {pal.label}
+      </Text>
+    </View>
   );
+}
 
-  if (!apiContext) {
-    return (
-      <Card title="Queue">
-        <MessageBanner message="No authenticated session." tone="error" />
-      </Card>
-    );
-  }
+// ─── Patient Profile Modal (nurse + physician only) ───────────────────────────
+interface ProfileModalProps {
+  ticket:    QueueTicket;
+  onClose:   () => void;
+  onTriage?:     (ticketId: string) => void;
+  onEncounter?:  (ticketId: string) => void;
+  onMessage?:    (patientId: string, name: string) => void;
+  scheme:    "dark" | "light";
+  T:         Record<string, string>;
+}
 
-  useEffect(() => {
-    if (!apiContext) {
-      return;
-    }
-    facilityApi
-      .getWorkflowConfig(apiContext)
-      .then((config) => {
-        setEmergencyFlowEnabled(config.emergencyFlowEnabled);
-        setAppointmentFlowEnabled(config.appointmentFlowEnabled);
-      })
-      .catch((error) => {
-        setMessage(toErrorMessage(error));
-        setTone("error");
-      });
-  }, [apiContext]);
+function PatientProfileModal({ ticket, onClose, onTriage, onEncounter, onMessage, scheme, T }: ProfileModalProps) {
+  const name = ticket.patientName || ticket.patientId || "Patient";
+  const vitals = (ticket as any).latestVitals || null;
 
-  useEffect(() => {
-    if (!availableCategoryOptions.length) {
-      return;
-    }
-    if (!availableCategoryOptions.includes(issueCategory as (typeof availableCategoryOptions)[number])) {
-      setIssueCategory(availableCategoryOptions[0]);
-    }
-  }, [availableCategoryOptions, issueCategory]);
-
-  useEffect(() => {
-    if (!emergencyFlowEnabled && issueEmergency) {
-      setIssueEmergency(false);
-    }
-  }, [emergencyFlowEnabled, issueEmergency]);
-
-  const showError = (error: unknown) => {
-    setMessage(toErrorMessage(error));
-    setTone("error");
-  };
-
-  const showSuccess = (text: string) => {
-    setMessage(text);
-    setTone("success");
-  };
-
-  const loadQueue = async () => {
-    try {
-      const data = await queueApi.getQueue(apiContext, queueKind);
-      setQueueRows(data);
-      showSuccess(`Loaded ${queueKind} queue`);
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const loadStats = async () => {
-    try {
-      const stats = await queueApi.getStats(apiContext);
-      setQueueStats(stats);
-      showSuccess("Queue stats loaded");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const issueTicket = async () => {
-    try {
-      if (issueEmergency && !emergencyFlowEnabled) {
-        throw new Error("Emergency workflow is disabled for this facility");
-      }
-      const ticket = issueEmergency
-        ? await queueApi.issueEmergencyTicket(apiContext, {
-            patientId: issuePatientId.trim(),
-            initialComplaint: issueComplaint
-          })
-        : await queueApi.issueTicket(apiContext, {
-            patientId: issuePatientId.trim(),
-            category: issueCategory,
-            initialComplaint: isReceptionist ? null : issueComplaint || null
-          });
-      setLatestTicket(ticket);
-      setTicketId(ticket.id);
-      showSuccess(issueEmergency ? "Emergency ticket issued" : "Queue ticket issued");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const callNextTriage = async () => {
-    try {
-      const ticket = await queueApi.callNextTriage(apiContext, counterTriage);
-      setLatestTicket(ticket);
-      setTicketId(ticket.id);
-      showSuccess("Called next triage patient");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const callNextConsultation = async () => {
-    try {
-      const ticket = await queueApi.callNextConsultation(apiContext, counterConsultation);
-      setLatestTicket(ticket);
-      setTicketId(ticket.id);
-      showSuccess("Called next consultation patient");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const callNextConsultationAndOpen = async () => {
-    try {
-      const ticket = await queueApi.callNextConsultation(apiContext, counterConsultation);
-      setLatestTicket(ticket);
-      setTicketId(ticket.id);
-      onMoveToEncounter?.(ticket.id);
-      showSuccess("Called next consultation patient and moved to encounter workflow");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const callSpecific = async () => {
-    try {
-      const ticket = await queueApi.callTicket(apiContext, ticketId.trim(), ticketCounter);
-      setLatestTicket(ticket);
-      showSuccess("Called specific patient");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const runTicketAction = async (action: "missed" | "start" | "return_waiting" | "complete" | "admit" | "no_show" | "cancel") => {
-    try {
-      const id = ticketId.trim();
-      let ticket: unknown;
-
-      if (action === "missed") {
-        ticket = await queueApi.markMissedCall(apiContext, id);
-      } else if (action === "start") {
-        ticket = await queueApi.startTicket(apiContext, id);
-      } else if (action === "return_waiting") {
-        ticket = await queueApi.returnToWaiting(apiContext, id);
-      } else if (action === "complete") {
-        ticket = await queueApi.completeTicket(apiContext, id);
-      } else if (action === "admit") {
-        ticket = await queueApi.admitTicket(apiContext, id, admissionReason || undefined);
-      } else if (action === "no_show") {
-        ticket = await queueApi.markNoShow(apiContext, id);
-      } else {
-        ticket = await queueApi.cancelTicket(apiContext, id);
-      }
-
-      setLatestTicket(ticket);
-      showSuccess(`Ticket action completed: ${action}`);
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const escalate = async () => {
-    try {
-      const ticket = await queueApi.escalateTicket(apiContext, ticketId.trim(), escalationLevel, escalationReason);
-      setLatestTicket(ticket);
-      showSuccess("Ticket escalated");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const loadTriageOutcome = async () => {
-    try {
-      const id = ticketId.trim();
-      if (!id) {
-        throw new Error("Ticket UUID is required");
-      }
-      const outcome = await queueApi.getTriageOutcome(apiContext, id, outcomePhysicalExam || undefined);
-      setTriageOutcome(outcome);
-      const refreshedQueue = await queueApi.getQueue(apiContext, queueKind);
-      setQueueRows(refreshedQueue);
-      showSuccess("Triage outcome synced to queue with suggested diagnoses");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const handoffToClinician = async () => {
-    try {
-      const id = ticketId.trim();
-      if (!id) {
-        throw new Error("Ticket UUID is required");
-      }
-      const ticket = await queueApi.handoffToClinician(apiContext, id, {
-        clinicianName: handoffClinicianName.trim(),
-        clinicianEmployeeId: handoffClinicianEmployeeId.trim(),
-        clinicianUserId: handoffClinicianUserId.trim() || null,
-        handoffNotes: handoffNotes || null
-      });
-      setLatestTicket(ticket);
-      showSuccess("Triage handoff to clinician recorded");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const continueToTriage = () => {
-    const id = ticketId.trim() || extractTicketId(latestTicket);
-    if (!id) {
-      showError(new Error("Ticket UUID is required"));
-      return;
-    }
-    setTicketId(id);
-    onMoveToTriage?.(id);
-    showSuccess("Moved to triage workflow with selected ticket");
-  };
-
-  const continueToEncounter = () => {
-    const id = ticketId.trim() || extractTicketId(latestTicket);
-    if (!id) {
-      showError(new Error("Ticket UUID is required"));
-      return;
-    }
-    setTicketId(id);
-    onMoveToEncounter?.(id);
-    showSuccess("Moved to encounter workflow with selected ticket");
+  const vitalColor = (val: number | null | undefined, low: number, high: number) => {
+    if (val == null) return T.textMuted;
+    if (val < low)   return "#3b82f6"; // blue = low
+    if (val > high)  return "#f97316"; // orange = high
+    return T.teal;                      // green = normal
   };
 
   return (
+    <Modal transparent animationType="slide" onRequestClose={onClose}>
+      <View style={[qss.modalOverlay, { backgroundColor: "rgba(0,0,0,0.55)" }]}>
+        <View style={[qss.modalCard, { backgroundColor: T.surface as string, borderColor: T.border }]}>
+          <View style={qss.modalHeader}>
+            <View>
+              <Text style={[qss.modalTitle, { color: T.text }]}>{name}</Text>
+              <Text style={[qss.modalSub, { color: T.textMuted }]}>
+                {/* After triage completes, workflowNumber === patientNumber (permanent MRN-style ID).
+                    Before triage it equals ticketNumber (e.g. G-042).  Always use workflowNumber. */}
+                {ticket.workflowNumber || ticket.ticketNumber || ticket.id.slice(0, 8)}
+                {ticket.triaged && ticket.patientNumber && ticket.patientNumber !== ticket.ticketNumber
+                  ? `  ·  MRN ${ticket.patientNumber}` : ""}
+                {ticket.appointmentId
+                  ? `  ·  Appointment ${formatTime(ticket.appointmentScheduledAt)}`
+                  : "  ·  Walk-in"}
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={qss.closeBtn}>
+              <Text style={[qss.closeBtnText, { color: T.teal }]}>✕ Close</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 14, padding: 16 }}>
+            {/* Triage level */}
+            {ticket.triageLevel ? (
+              <View style={qss.modalSection}>
+                <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>TRIAGE LEVEL</Text>
+                <TriageBadge level={ticket.triageLevel} scheme={scheme} />
+              </View>
+            ) : null}
+
+            {/* Chief complaint */}
+            {ticket.initialComplaint ? (
+              <View style={qss.modalSection}>
+                <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>CHIEF COMPLAINT</Text>
+                <View style={[qss.infoBox, { backgroundColor: T.surfaceAlt as string, borderColor: T.borderLight }]}>
+                  <Text style={[{ color: T.text, fontSize: 14, lineHeight: 20 }]}>{ticket.initialComplaint}</Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Vitals grid */}
+            {vitals ? (
+              <View style={qss.modalSection}>
+                <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>VITALS</Text>
+                <View style={qss.vitalsGrid}>
+                  {[
+                    { label: "BP", value: vitals.bloodPressureSystolic != null ? `${vitals.bloodPressureSystolic}/${vitals.bloodPressureDiastolic}` : null, low: 90, high: 140, unit: "mmHg" },
+                    { label: "HR", value: vitals.heartRateBpm, low: 60, high: 100, unit: "bpm" },
+                    { label: "SpO₂", value: vitals.oxygenSaturation, low: 95, high: 100, unit: "%" },
+                    { label: "Temp", value: vitals.temperatureCelsius, low: 36.1, high: 37.2, unit: "°C" },
+                    { label: "RR", value: vitals.respiratoryRate, low: 12, high: 20, unit: "/min" },
+                    { label: "Pain", value: vitals.painScore, low: 0, high: 3, unit: "/10" },
+                  ].map(v => (
+                    <View key={v.label} style={[qss.vitalCard, { backgroundColor: T.surfaceAlt as string, borderColor: T.borderLight }]}>
+                      <Text style={[qss.vitalLabel, { color: T.textMuted }]}>{v.label}</Text>
+                      <Text style={[qss.vitalValue, {
+                        color: typeof v.value === "number"
+                          ? vitalColor(v.value, v.low, v.high)
+                          : v.value != null ? T.teal : T.textMuted
+                      }]}>
+                        {v.value != null ? `${v.value}${v.unit}` : "—"}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            {/* Appointment info */}
+            {ticket.appointmentId ? (
+              <View style={qss.modalSection}>
+                <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>APPOINTMENT</Text>
+                <View style={[qss.infoBox, { backgroundColor: T.surfaceAlt as string, borderColor: T.borderLight }]}>
+                  <Text style={[{ color: T.text, fontSize: 13 }]}>
+                    {formatDateTime(ticket.appointmentScheduledAt)}
+                  </Text>
+                  {ticket.assignedClinicianName ? (
+                    <Text style={[{ color: T.textMid, fontSize: 13, marginTop: 4 }]}>
+                      Physician: {ticket.assignedClinicianName}
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
+
+            {/* Wait time */}
+            <View style={qss.modalSection}>
+              <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>WAIT TIME</Text>
+              <Text style={[{ color: T.text, fontSize: 18, fontWeight: "700" }]}>
+                {waitLabel(ticket.waitTimeMinutes)}
+              </Text>
+            </View>
+          </ScrollView>
+
+          {/* Actions */}
+          <View style={[qss.modalActions, { borderTopColor: T.border }]}>
+            {onMessage && ticket.patientId ? (
+              <Pressable
+                onPress={() => onMessage(ticket.patientId!, name)}
+                style={[qss.modalActionBtn, { backgroundColor: T.surfaceAlt as string, borderColor: T.border }]}
+              >
+                <Text style={[qss.modalActionBtnText, { color: T.teal }]}>✉ Message</Text>
+              </Pressable>
+            ) : null}
+            {onTriage ? (
+              <Pressable
+                onPress={() => { onTriage(ticket.id); onClose(); }}
+                style={[qss.modalActionBtn, { backgroundColor: T.teal, borderColor: T.teal }]}
+              >
+                <Text style={[qss.modalActionBtnText, { color: "#fff" }]}>Open Triage →</Text>
+              </Pressable>
+            ) : null}
+            {onEncounter ? (
+              <Pressable
+                onPress={() => { onEncounter(ticket.id); onClose(); }}
+                style={[qss.modalActionBtn, { backgroundColor: T.teal, borderColor: T.teal }]}
+              >
+                <Text style={[qss.modalActionBtnText, { color: "#fff" }]}>Begin Encounter →</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Queue Row ────────────────────────────────────────────────────────────────
+function QueueRow({
+  ticket, role, onView, T, scheme,
+}: {
+  ticket: QueueTicket;
+  role: string | null;
+  onView: (t: QueueTicket) => void;
+  T: Record<string, string>;
+  scheme: "dark" | "light";
+}) {
+  const isAppt = !!ticket.appointmentId;
+  const key = (ticket.triageLevel?.toUpperCase() || "") as TriageKey;
+  const pal = triagePalette[key];
+  const borderColor = pal?.border || T.border;
+
+  return (
+    <View style={[qss.row, {
+      backgroundColor: T.surface as string,
+      borderColor: T.border,
+      borderLeftColor: borderColor,
+    }]}>
+      {/* Left: identifier + triage badge.
+           workflowNumber === patientNumber (permanent MRN-style) after triage completes.
+           workflowNumber === ticketNumber (e.g. G-042) before triage.
+           Always render workflowNumber so the correct identifier is shown automatically. */}
+      <View style={qss.rowLeft}>
+        <Text style={[qss.rowTicket, { color: T.teal }]}>
+          {ticket.workflowNumber || ticket.ticketNumber || "—"}
+        </Text>
+        {ticket.triaged && ticket.patientNumber && ticket.patientNumber !== ticket.ticketNumber ? (
+          <Text style={{ fontSize: 9, color: T.textMuted, marginTop: 2 }}>
+            MRN {ticket.patientNumber}
+          </Text>
+        ) : null}
+        {ticket.triageLevel ? (
+          <TriageBadge level={ticket.triageLevel} scheme={scheme} />
+        ) : null}
+      </View>
+
+      {/* Centre: name / appointment label */}
+      <View style={qss.rowCentre}>
+        <Text style={[qss.rowName, { color: T.text }]} numberOfLines={1}>
+          {ticket.patientName || ticket.patientId || "—"}
+        </Text>
+        {isAppt ? (
+          <View style={[qss.apptChip, { backgroundColor: scheme === "dark" ? "#1a3a52" : "#e0f2f1", borderColor: T.teal + "60" }]}>
+            <Text style={[qss.apptChipText, { color: T.teal }]}>
+              📅 Appointment · {formatTime(ticket.appointmentScheduledAt)}
+              {ticket.assignedClinicianName ? `  · ${ticket.assignedClinicianName}` : ""}
+            </Text>
+          </View>
+        ) : (
+          <Text style={[qss.rowSub, { color: T.textMuted }]}>Walk-in</Text>
+        )}
+        {ticket.initialComplaint ? (
+          <Text style={[qss.rowComplaint, { color: T.textMid }]} numberOfLines={1}>
+            {ticket.initialComplaint}
+          </Text>
+        ) : null}
+      </View>
+
+      {/* Right: wait + action */}
+      <View style={qss.rowRight}>
+        <Text style={[qss.rowWait, { color: T.textMuted }]}>{waitLabel(ticket.waitTimeMinutes)}</Text>
+        {(role === "NURSE" || role === "PHYSICIAN") ? (
+          <Pressable onPress={() => onView(ticket)}
+            style={[qss.viewBtn, { backgroundColor: T.teal }]}>
+            <Text style={qss.viewBtnText}>View →</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+// ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
+export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging, onBookAppointment }: QueueScreenProps) {
+  const { apiContext, role } = useSession();
+  const { theme: T } = useTheme();
+
+  const isNurse        = role === "NURSE";
+  const isPhysician    = role === "PHYSICIAN";
+  const isReceptionist = role === "RECEPTIONIST";
+  const canClinical    = isNurse || isPhysician;
+
+  // Which queue does this role see by default?
+  const defaultQueueView = isPhysician ? "consultation" : "triage";
+  const [queueView, setQueueView]         = useState(defaultQueueView);
+  const [rows,      setRows]              = useState<QueueTicket[]>([]);
+  const [stats,     setStats]             = useState<unknown>(null);
+  const [selected,  setSelected]          = useState<QueueTicket | null>(null);
+  const [message,   setMessage]           = useState<string | null>(null);
+  const [tone,      setTone]              = useState<"success" | "error">("success");
+
+  // Issue ticket form
+  const [issuePatientId,   setIssuePatientId]   = useState("");
+  const [issueCategory,    setIssueCategory]    = useState("GENERAL");
+  const [issueComplaint,   setIssueComplaint]   = useState("");
+  const [issueEmergency,   setIssueEmergency]   = useState(false);
+  const [emergencyEnabled, setEmergencyEnabled] = useState(true);
+  const [apptEnabled,      setApptEnabled]      = useState(true);
+
+  // Call-next counters
+  const [triageCounter, setTriageCounter]       = useState("Triage Room 1");
+  const [doctorCounter, setDoctorCounter]       = useState("Consult Room 1");
+
+  // Ticket actions
+  const [ticketId, setTicketId]       = useState("");
+  const [escalateLevel, setEscalateLevel] = useState("ORANGE");
+  const [escalateReason, setEscalateReason] = useState("");
+  const [admitReason, setAdmitReason] = useState("");
+  const [latestTicket, setLatestTicket] = useState<unknown>(null);
+
+  // Appointment booking (receptionist + nurse)
+  const [bookingPatientId, setBookingPatientId] = useState("");
+  const [bookingNote, setBookingNote] = useState("");
+
+  const err = (e: unknown) => { setMessage(toErrorMessage(e)); setTone("error"); };
+  const ok  = (s: string)  => { setMessage(s); setTone("success"); };
+
+  useEffect(() => {
+    if (!apiContext) return;
+    facilityApi.getWorkflowConfig(apiContext)
+      .then(c => { setEmergencyEnabled(c.emergencyFlowEnabled); setApptEnabled(c.appointmentFlowEnabled); })
+      .catch(() => {});
+  }, [apiContext]);
+
+  // Physician only ever sees the doctor queue — don't offer other views
+  const availableViews = useMemo(() => {
+    if (isPhysician) return [{ key: "consultation", label: "Doctor Queue" }];
+    if (isNurse)     return [
+      { key: "triage",        label: "Triage Queue"  },
+      { key: "consultation",  label: "Doctor Queue"  },
+      { key: "waiting",       label: "All Waiting"   },
+      { key: "today",         label: "Today"         },
+    ];
+    return [
+      { key: "triage",       label: "Triage Queue"  },
+      { key: "consultation", label: "Doctor Queue"  },
+      { key: "today",        label: "Today"         },
+    ];
+  }, [isPhysician, isNurse]);
+
+  useEffect(() => {
+    const valid = availableViews.some(v => v.key === queueView);
+    if (!valid) setQueueView(availableViews[0].key);
+  }, [availableViews, queueView]);
+
+  const loadQueue = async () => {
+    if (!apiContext) return;
+    try {
+      const data = await queueApi.getQueue(apiContext, queueView as any);
+      setRows(data);
+      ok(`Loaded ${data.length} ticket(s)`);
+    } catch (e) { err(e); }
+  };
+
+  const loadStats = async () => {
+    if (!apiContext) return;
+    try { setStats(await queueApi.getStats(apiContext)); ok("Stats loaded"); }
+    catch (e) { err(e); }
+  };
+
+  const issueTicket = async () => {
+    if (!apiContext) return;
+    try {
+      const t = issueEmergency
+        ? await queueApi.issueEmergencyTicket(apiContext, { patientId: issuePatientId.trim(), initialComplaint: issueComplaint })
+        : await queueApi.issueTicket(apiContext, { patientId: issuePatientId.trim(), category: issueCategory, initialComplaint: isReceptionist ? null : issueComplaint || null });
+      setLatestTicket(t); setTicketId(t.id);
+      ok(issueEmergency ? "Emergency ticket issued" : "Ticket issued");
+    } catch (e) { err(e); }
+  };
+
+  const callNextTriage = async () => {
+    if (!apiContext) return;
+    try {
+      const t = await queueApi.callNextTriage(apiContext, triageCounter);
+      setLatestTicket(t); setTicketId(t.id);
+      ok("Called next triage patient");
+    } catch (e) { err(e); }
+  };
+
+  const callNextDoctor = async () => {
+    if (!apiContext) return;
+    try {
+      const t = await queueApi.callNextConsultation(apiContext, doctorCounter);
+      setLatestTicket(t); setTicketId(t.id);
+      ok("Called next patient");
+    } catch (e) { err(e); }
+  };
+
+  const callNextDoctorAndOpen = async () => {
+    if (!apiContext) return;
+    try {
+      const t = await queueApi.callNextConsultation(apiContext, doctorCounter);
+      setLatestTicket(t); setTicketId(t.id);
+      onMoveToEncounter?.(t.id);
+    } catch (e) { err(e); }
+  };
+
+  const ticketAction = async (action: "missed" | "start" | "return_waiting" | "complete" | "admit" | "no_show" | "cancel") => {
+    if (!apiContext) return;
+    try {
+      const id = ticketId.trim();
+      let t: unknown;
+      if (action === "missed")         t = await queueApi.markMissedCall(apiContext, id);
+      else if (action === "start")     t = await queueApi.startTicket(apiContext, id);
+      else if (action === "return_waiting") t = await queueApi.returnToWaiting(apiContext, id);
+      else if (action === "complete")  t = await queueApi.completeTicket(apiContext, id);
+      else if (action === "admit")     t = await queueApi.admitTicket(apiContext, id, admitReason || undefined);
+      else if (action === "no_show")   t = await queueApi.markNoShow(apiContext, id);
+      else                             t = await queueApi.cancelTicket(apiContext, id);
+      setLatestTicket(t); ok(`Action: ${action}`);
+    } catch (e) { err(e); }
+  };
+
+  const escalate = async () => {
+    if (!apiContext) return;
+    try {
+      const t = await queueApi.escalateTicket(apiContext, ticketId.trim(), escalateLevel, escalateReason);
+      setLatestTicket(t); ok("Escalated");
+    } catch (e) { err(e); }
+  };
+
+  // Patient profile row click
+  const handleRowView = (ticket: QueueTicket) => {
+    setTicketId(ticket.id);
+    setSelected(ticket);
+  };
+
+  const handleProfileTriage = (id: string) => {
+    setSelected(null);
+    onMoveToTriage?.(id);
+  };
+
+  const handleProfileEncounter = (id: string) => {
+    setSelected(null);
+    onMoveToEncounter?.(id);
+  };
+
+  if (!apiContext) {
+    return <Card title="Queue"><MessageBanner message="No authenticated session." tone="error" /></Card>;
+  }
+
+  const currentViewLabel = availableViews.find(v => v.key === queueView)?.label || queueView;
+
+  return (
     <>
-      <Card title="Queue Overview">
-        <ChoiceChips label="Queue View" options={queueViewOptions} value={queueKind} onChange={(value) => setQueueKind(value as typeof queueKind)} />
+      {/* Patient profile modal */}
+      {selected ? (
+        <PatientProfileModal
+          ticket={selected}
+          onClose={() => setSelected(null)}
+          onTriage={isNurse && !selected.triaged ? handleProfileTriage : undefined}
+          onEncounter={(isNurse && selected.triaged) || isPhysician ? handleProfileEncounter : undefined}
+          onMessage={(isNurse || isPhysician) && onOpenMessaging ? onOpenMessaging : undefined}
+          scheme={T.scheme}
+          T={T as any}
+        />
+      ) : null}
+
+      {/* Queue view selector */}
+      <Card title="Queue">
+        <View style={qss.viewTabs}>
+          {availableViews.map(v => (
+            <Pressable key={v.key} onPress={() => setQueueView(v.key)}
+              style={[qss.viewTab, { borderColor: T.border, backgroundColor: T.surfaceAlt as string },
+                queueView === v.key && { backgroundColor: T.teal, borderColor: T.teal }
+              ]}>
+              <Text style={[qss.viewTabText, { color: queueView === v.key ? "#fff" : T.textMid }]}>{v.label}</Text>
+            </Pressable>
+          ))}
+        </View>
         <InlineActions>
           <ActionButton label="Load Queue" onPress={loadQueue} />
-          <ActionButton label="Load Stats" onPress={loadStats} variant="secondary" />
+          <ActionButton label="Stats" onPress={loadStats} variant="secondary" />
         </InlineActions>
         <MessageBanner message={message} tone={tone} />
       </Card>
 
+      {/* Live queue rows */}
+      {canClinical && rows.length > 0 ? (
+        <Card title={`${currentViewLabel} (${rows.length})`}>
+          <View style={{ gap: 8 }}>
+            {rows.map(r => (
+              <QueueRow
+                key={r.id}
+                ticket={r}
+                role={role}
+                onView={handleRowView}
+                T={T as any}
+                scheme={T.scheme}
+              />
+            ))}
+          </View>
+        </Card>
+      ) : null}
+
+      {/* Issue ticket — all roles */}
       <Card title="Issue Ticket">
         <InputField label="Patient UUID" value={issuePatientId} onChangeText={setIssuePatientId} />
-        <ChoiceChips label="Category" options={availableCategoryOptions} value={issueCategory} onChange={setIssueCategory} />
-        {!emergencyFlowEnabled ? (
-          <MessageBanner message="Emergency workflow is currently disabled by facility configuration." tone="error" />
-        ) : null}
-        {!appointmentFlowEnabled ? (
-          <MessageBanner message="Appointment/follow-up workflow is currently disabled by facility configuration." tone="error" />
-        ) : null}
-        {isReceptionist ? (
-          <MessageBanner
-            message="Reception role privacy mode: symptoms/complaints are not collected before triage."
-            tone="success"
-          />
+        <ChoiceChips label="Category" options={queueCategoryOptions} value={issueCategory} onChange={setIssueCategory} />
+        {!isReceptionist ? (
+          <InputField label="Chief Complaint" value={issueComplaint} onChangeText={setIssueComplaint} multiline />
         ) : (
-          <InputField label="Complaint" value={issueComplaint} onChangeText={setIssueComplaint} multiline />
+          <MessageBanner message="Reception mode: symptoms are not collected before triage." tone="info" />
         )}
         <InlineActions>
           <ActionButton
@@ -333,100 +542,115 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter }: QueueScreenPr
             onPress={issueTicket}
             variant={issueEmergency ? "danger" : "primary"}
           />
-          {!isReceptionist && emergencyFlowEnabled ? (
+          {emergencyEnabled && !isReceptionist ? (
             <ActionButton
               label={issueEmergency ? "Switch to Standard" : "Switch to Emergency"}
-              onPress={() => setIssueEmergency((value) => !value)}
+              onPress={() => setIssueEmergency(v => !v)}
               variant="ghost"
             />
           ) : null}
         </InlineActions>
       </Card>
 
+      {/* Appointment booking — receptionist + nurse */}
+      {(isReceptionist || isNurse) ? (
+        <Card title="Book Appointment">
+          <InputField label="Patient UUID" value={bookingPatientId} onChangeText={setBookingPatientId} />
+          <InputField label="Reason / Notes" value={bookingNote} onChangeText={setBookingNote} multiline />
+          <InlineActions>
+            <ActionButton label="Open Appointment Booking" onPress={() => onBookAppointment?.()} />
+          </InlineActions>
+        </Card>
+      ) : null}
+
+      {/* Call Next */}
       <Card title="Call Next">
-        <InputField label="Triage Counter" value={counterTriage} onChangeText={setCounterTriage} />
-        <InlineActions>
-          <ActionButton label="Call Next Triage" onPress={callNextTriage} />
-        </InlineActions>
-        <InputField label="Consultation Counter" value={counterConsultation} onChangeText={setCounterConsultation} />
-        <InlineActions>
-          <ActionButton label="Call Next Consultation" onPress={callNextConsultation} variant="secondary" />
-          <ActionButton label="Call Next + Open Encounter" onPress={callNextConsultationAndOpen} variant="secondary" />
-        </InlineActions>
+        {!isPhysician ? (
+          <>
+            <InputField label="Triage Counter" value={triageCounter} onChangeText={setTriageCounter} />
+            <InlineActions>
+              <ActionButton label="Call Next — Triage" onPress={callNextTriage} />
+            </InlineActions>
+          </>
+        ) : null}
+        {!isNurse ? (
+          <>
+            <InputField label="Doctor Queue Counter" value={doctorCounter} onChangeText={setDoctorCounter} />
+            <InlineActions>
+              <ActionButton label="Call Next — Doctor Queue" onPress={callNextDoctor} variant="secondary" />
+              <ActionButton label="Call Next + Open Encounter" onPress={callNextDoctorAndOpen} variant="secondary" />
+            </InlineActions>
+          </>
+        ) : null}
       </Card>
 
+      {/* Ticket Actions */}
       <Card title="Ticket Actions">
         <InputField label="Ticket UUID" value={ticketId} onChangeText={setTicketId} />
-        <InputField label="Assigned Clinician Name" value={handoffClinicianName} onChangeText={setHandoffClinicianName} />
-        <InputField
-          label="Assigned Clinician Employee ID"
-          value={handoffClinicianEmployeeId}
-          onChangeText={setHandoffClinicianEmployeeId}
-        />
-        <InputField
-          label="Assigned Clinician User UUID (optional)"
-          value={handoffClinicianUserId}
-          onChangeText={setHandoffClinicianUserId}
-        />
-        <InputField label="Handoff Notes (optional)" value={handoffNotes} onChangeText={setHandoffNotes} multiline />
         <InlineActions>
-          <ActionButton label="Handoff to Clinician" onPress={handoffToClinician} />
+          <ActionButton label="Start Session"     onPress={() => ticketAction("start")}          variant="secondary" />
+          <ActionButton label="Return to Waiting" onPress={() => ticketAction("return_waiting")} variant="secondary" />
+          <ActionButton label="Complete"          onPress={() => ticketAction("complete")}        variant="secondary" />
+          <ActionButton label="Missed Call"       onPress={() => ticketAction("missed")}          variant="ghost"     />
+          <ActionButton label="Admit Patient"     onPress={() => ticketAction("admit")}           variant="secondary" />
+          <ActionButton label="No-Show"           onPress={() => ticketAction("no_show")}         variant="danger"    />
+          <ActionButton label="Cancel"            onPress={() => ticketAction("cancel")}          variant="danger"    />
         </InlineActions>
-        <InputField label="Counter for specific call" value={ticketCounter} onChangeText={setTicketCounter} />
-        <InlineActions>
-          <ActionButton label="Call Specific Ticket" onPress={callSpecific} />
-          <ActionButton label="Missed Call" onPress={() => runTicketAction("missed")} variant="ghost" />
-          <ActionButton label="Start Session" onPress={() => runTicketAction("start")} variant="secondary" />
-          <ActionButton label="Return to Waiting" onPress={() => runTicketAction("return_waiting")} variant="secondary" />
-          <ActionButton label="Complete Session" onPress={() => runTicketAction("complete")} variant="secondary" />
-          <ActionButton label="Admit Patient" onPress={() => runTicketAction("admit")} variant="secondary" />
-          <ActionButton label="No-Show" onPress={() => runTicketAction("no_show")} variant="danger" />
-          <ActionButton label="Cancel Ticket" onPress={() => runTicketAction("cancel")} variant="danger" />
-        </InlineActions>
-        <InlineActions>
-          <ActionButton label="Continue to Triage" onPress={continueToTriage} variant="secondary" />
-          <ActionButton label="Continue to Encounter" onPress={continueToEncounter} variant="secondary" />
-        </InlineActions>
-        <InputField label="Admission Reason (optional)" value={admissionReason} onChangeText={setAdmissionReason} multiline />
-        <ChoiceChips label="Escalate to" options={triageLevelOptions} value={escalationLevel} onChange={setEscalationLevel} />
-        <InputField label="Escalation Reason" value={escalationReason} onChangeText={setEscalationReason} multiline />
+        <InputField label="Admission Reason (optional)" value={admitReason} onChangeText={setAdmitReason} multiline />
+        <ChoiceChips label="Escalate to" options={triageLevelOptions} value={escalateLevel} onChange={setEscalateLevel} />
+        <InputField label="Escalation Reason" value={escalateReason} onChangeText={setEscalateReason} multiline />
         <InlineActions>
           <ActionButton label="Escalate Priority" onPress={escalate} variant="danger" />
-        </InlineActions>
-        <InputField
-          label="Outcome Physical Exam (optional)"
-          value={outcomePhysicalExam}
-          onChangeText={setOutcomePhysicalExam}
-          multiline
-        />
-        <InlineActions>
-          <ActionButton label="Sync Triage Outcome to Queue" onPress={loadTriageOutcome} />
+          <ActionButton label="→ Triage"          onPress={() => { if (ticketId.trim()) { onMoveToTriage?.(ticketId.trim()); }}}   variant="secondary" />
+          <ActionButton label="→ Encounter"       onPress={() => { if (ticketId.trim()) { onMoveToEncounter?.(ticketId.trim()); }}} variant="secondary" />
         </InlineActions>
       </Card>
 
-      {queueRows.length ? (
-        <Card title={`Queue Rows (${queueRows.length})`}>
-          <JsonPanel value={queueRows} />
-        </Card>
+      {stats ? (
+        <Card title="Queue Stats"><JsonPanel value={stats} /></Card>
       ) : null}
-
-      {queueStats ? (
-        <Card title="Queue Stats">
-          <JsonPanel value={queueStats} />
-        </Card>
-      ) : null}
-
       {latestTicket ? (
-        <Card title="Latest Ticket Response">
-          <JsonPanel value={latestTicket} />
-        </Card>
-      ) : null}
-
-      {triageOutcome ? (
-        <Card title="Triage Outcome (Queue + Suggested Diagnosis)">
-          <JsonPanel value={triageOutcome} />
-        </Card>
+        <Card title="Latest Ticket"><JsonPanel value={latestTicket} /></Card>
       ) : null}
     </>
   );
 }
+
+// ─── styles ───────────────────────────────────────────────────────────────────
+const qss = StyleSheet.create({
+  viewTabs:      { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  viewTab:       { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1.5 },
+  viewTabText:   { fontSize: 12, fontWeight: "700" },
+  row:           { borderWidth: 1, borderLeftWidth: 4, borderRadius: 12, padding: 12, flexDirection: "row", alignItems: "center", gap: 10 },
+  rowLeft:       { width: 70, gap: 5, alignItems: "flex-start" },
+  rowTicket:     { fontSize: 14, fontWeight: "800" },
+  rowCentre:     { flex: 1, gap: 4 },
+  rowName:       { fontSize: 14, fontWeight: "700" },
+  rowSub:        { fontSize: 11 },
+  rowComplaint:  { fontSize: 12 },
+  rowRight:      { alignItems: "flex-end", gap: 6 },
+  rowWait:       { fontSize: 11 },
+  viewBtn:       { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 7 },
+  viewBtnText:   { fontSize: 12, fontWeight: "700", color: "#fff" },
+  triageBadge:   { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5, borderWidth: 1 },
+  apptChip:      { flexDirection: "row", alignSelf: "flex-start", paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5, borderWidth: 1 },
+  apptChipText:  { fontSize: 11, fontWeight: "600" },
+  // Modal
+  modalOverlay:  { flex: 1, justifyContent: "center", alignItems: "center", padding: 16 },
+  modalCard:     { width: "100%", maxWidth: 520, maxHeight: "90%", borderRadius: 20, borderWidth: 1, overflow: "hidden" },
+  modalHeader:   { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", padding: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.08)" },
+  modalTitle:    { fontSize: 18, fontWeight: "800" },
+  modalSub:      { fontSize: 12, marginTop: 3 },
+  closeBtn:      { padding: 4 },
+  closeBtnText:  { fontSize: 13, fontWeight: "700" },
+  modalSection:  { gap: 6 },
+  modalSectionTitle: { fontSize: 10, fontWeight: "700", letterSpacing: 1 },
+  infoBox:       { borderWidth: 1, borderRadius: 10, padding: 12 },
+  vitalsGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  vitalCard:     { width: "30%", minWidth: 80, borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 },
+  vitalLabel:    { fontSize: 10, fontWeight: "700" },
+  vitalValue:    { fontSize: 16, fontWeight: "800" },
+  modalActions:  { flexDirection: "row", gap: 8, padding: 12, borderTopWidth: 1, flexWrap: "wrap" },
+  modalActionBtn:{ flex: 1, minWidth: 100, padding: 12, borderRadius: 10, borderWidth: 1, alignItems: "center" },
+  modalActionBtnText: { fontSize: 13, fontWeight: "700" },
+});

@@ -1,10 +1,20 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { clinicalPortalApi } from "../../api/services";
 import { ActionButton, Card, InlineActions, InputField, JsonPanel, MessageBanner, ToggleField } from "../../components/ui";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 
-export function PortalOpsScreen() {
+interface PortalOpsScreenProps {
+  prefillPatientId?: string;
+  prefillPatientName?: string;
+  onPrefillConsumed?: () => void;
+}
+
+export function PortalOpsScreen({
+  prefillPatientId,
+  prefillPatientName,
+  onPrefillConsumed
+}: PortalOpsScreenProps) {
   const { apiContext } = useSession();
   const [patientId, setPatientId] = useState("");
   const [justification, setJustification] = useState("");
@@ -38,6 +48,19 @@ export function PortalOpsScreen() {
   const [lastResponse, setLastResponse] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"success" | "error">("success");
+
+  useEffect(() => {
+    if (!prefillPatientId) {
+      return;
+    }
+    setPatientId(prefillPatientId);
+    if (prefillPatientName && !messageSubject.trim()) {
+      setMessageSubject(`Message for ${prefillPatientName}`);
+    }
+    setMessage(`Loaded patient messaging target: ${prefillPatientName || prefillPatientId}`);
+    setTone("success");
+    onPrefillConsumed?.();
+  }, [messageSubject, onPrefillConsumed, prefillPatientId, prefillPatientName]);
 
   if (!apiContext) {
     return (

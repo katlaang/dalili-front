@@ -1,48 +1,41 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { authApi } from "../api/services";
-import { ActionButton, AppShell, MessageBanner } from "../components/ui";
+import { ActionButton, AppShell, MessageBanner, ThemeToggleButton, useTheme } from "../components/ui";
 import { LoginScreen } from "../screens/auth/LoginScreen";
 import { KioskWorkspaceScreen } from "../screens/kiosk/KioskWorkspaceScreen";
 import { PatientWorkspaceScreen } from "../screens/patient/PatientWorkspaceScreen";
 import { StaffWorkspaceScreen } from "../screens/staff/StaffWorkspaceScreen";
 import { useSession } from "../state/session";
-import { colors } from "../constants/theme";
 import { useCheckInDeepLink } from "../hooks/useCheckInDeepLink";
 
 export function AuthenticatedRoot() {
   const { actor, username, apiContext, signOut, bootstrapped } = useSession();
+  const { theme: T } = useTheme();
+
   const [message, setMessage] = useState<string | null>(null);
   const [staffRequestedTab, setStaffRequestedTab] = useState<"profile" | null>(null);
   const checkInDeepLinkPrefill = useCheckInDeepLink();
 
   const title = useMemo(() => {
-    if (actor === "KIOSK") {
-      return "Dalili Kiosk Workspace";
-    }
-    if (actor === "PATIENT") {
-      return "Dalili Patient Workspace";
-    }
-    return "Dalili Staff Workspace";
+    if (actor === "KIOSK")   return "Dalili Kiosk";
+    if (actor === "PATIENT") return "Dalili Patient Portal";
+    return "Dalili Health Platform";
   }, [actor]);
 
   const subtitle = useMemo(() => {
-    if (!username) {
-      return "Authenticated session";
-    }
+    if (!username) return "Authenticated session";
     return `Signed in as ${username}`;
   }, [username]);
 
   useEffect(() => {
-    if (actor) {
-      setMessage(null);
-    }
+    if (actor) setMessage(null);
   }, [actor]);
 
   if (!bootstrapped) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg }}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: T.bg }}>
+        <ActivityIndicator size="large" color={T.teal} />
       </View>
     );
   }
@@ -52,44 +45,41 @@ export function AuthenticatedRoot() {
   }
 
   const logout = async () => {
-    try {
-      await authApi.logout(apiContext);
-    } catch {
-      // The frontend should still clear local session even if backend logout fails.
-    } finally {
-      await signOut();
-      setMessage("Logged out");
-    }
+    try { await authApi.logout(apiContext); } catch { /* still clear local state */ }
+    finally { await signOut(); setMessage("Signed out"); }
   };
 
   return (
-      <AppShell
-        title={title}
-        subtitle={subtitle}
-        rightAction={
-          actor === "KIOSK" ? undefined : (
-            <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-              {actor === "STAFF" ? (
-                <ActionButton
-                  label="Profile"
-                  onPress={() => setStaffRequestedTab("profile")}
-                  variant="ghost"
-                />
-              ) : null}
-              <ActionButton label="Logout" onPress={logout} variant="ghost" />
-            </View>
-          )
-        }
-      >
-        <MessageBanner message={message} tone="success" />
-      {actor === "STAFF" ? (
+    <AppShell
+      title={title}
+      subtitle={subtitle}
+      rightAction={
+        actor === "KIOSK" ? undefined : (
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+            {/* Theme toggle is always available to staff and patients */}
+            <ThemeToggleButton />
+            {actor === "STAFF" && (
+              <ActionButton
+                label="Profile"
+                onPress={() => setStaffRequestedTab("profile")}
+                variant="ghost"
+              />
+            )}
+            <ActionButton label="Sign Out" onPress={logout} variant="ghost" />
+          </View>
+        )
+      }
+    >
+      <MessageBanner message={message} tone="success" />
+
+      {actor === "STAFF" && (
         <StaffWorkspaceScreen
           requestedTab={staffRequestedTab}
           onRequestedTabHandled={() => setStaffRequestedTab(null)}
         />
-      ) : null}
-      {actor === "KIOSK" ? <KioskWorkspaceScreen /> : null}
-      {actor === "PATIENT" ? <PatientWorkspaceScreen deepLinkCheckInPrefill={checkInDeepLinkPrefill} /> : null}
+      )}
+      {actor === "KIOSK"   && <KioskWorkspaceScreen />}
+      {actor === "PATIENT" && <PatientWorkspaceScreen deepLinkCheckInPrefill={checkInDeepLinkPrefill} />}
     </AppShell>
   );
 }

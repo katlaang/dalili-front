@@ -27,8 +27,13 @@ export interface HealthResponse {
 export interface QueueTicket {
   id: string;
   patientId: string;
+  patientMrn?: string;
+  patientNumber?: string;
+  patientName?: string;
   queueDate: string;
   ticketNumber: string;
+  trackingNumber?: string;
+  workflowNumber?: string;
   category: string;
   triageLevel: string;
   status: string;
@@ -82,6 +87,7 @@ export interface KioskCheckInResponse {
   patientName: string;
   ticketId: string;
   ticketNumber: string;
+  trackingNumber?: string;
   category: string;
   triageLevel: string;
   estimatedWaitMinutes: number;
@@ -213,6 +219,22 @@ export interface EncounterResponse {
   canHaveAddendum: boolean;
 }
 
+export interface EncounterAccessLogEntry {
+  id: string;
+  encounterId: string;
+  accessedByUserId: string;
+  accessedByName: string;
+  accessReason: string;
+  accessedAt: string;
+  addendumCreated?: boolean;
+  addendumId?: string;
+}
+
+export interface EncounterAccessLogResponse {
+  entries: EncounterAccessLogEntry[];
+  total: number;
+}
+
 export interface SuggestedMedication {
   name: string;
   dose: string;
@@ -320,6 +342,7 @@ export interface PatientPortalProfile {
 export interface PatientPortalQueueTicket {
   id: string;
   ticketNumber: string;
+  trackingNumber?: string;
   category: string;
   triageLevel: string;
   status: string;

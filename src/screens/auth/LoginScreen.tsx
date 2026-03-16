@@ -1,135 +1,156 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { authApi } from "../../api/services";
-import { AppShell, ActionButton, Card, ChoiceChips, InputField, InlineActions, MessageBanner } from "../../components/ui";
 import { useSession } from "../../state/session";
-import { colors } from "../../constants/theme";
 import { toErrorMessage } from "../../utils/format";
 
-type LoginMode = "STAFF" | "PATIENT" | "KIOSK";
-type AuthPanel = "LOGIN" | "ADMIN_LOGIN" | "ADMIN_SETUP";
-const clinicOptions = ["Dalili Health Clinic", "Sunrise Community Clinic"] as const;
+// ─── LOGIN SCREEN ─────────────────────────────────────────────────────────────
+// Supports PATIENT and STAFF actors only.
+// Kiosk runs on its own dedicated screen (KioskWorkspaceScreen) and never
+// passes through this login flow.
+
+type LoginMode  = "PATIENT" | "STAFF";
+type AuthPanel  = "LOGIN" | "ADMIN_LOGIN" | "ADMIN_SETUP";
+export type ColorScheme = "dark" | "light";
+
+const DARK = {
+  bg:        "#0b1623",
+  surface:   "rgba(15,30,46,0.90)",
+  border:    "#1a3045",
+  text:      "#d4e8f5",
+  textMid:   "#7aaccb",
+  textMuted: "#3a6080",
+  teal:      "#2DD4BF",
+  inputBg:   "rgba(255,255,255,0.06)",
+} as const;
+
+const LIGHT = {
+  bg:        "#f0f7fc",
+  surface:   "rgba(255,255,255,0.93)",
+  border:    "#c8dfe9",
+  text:      "#0f2d42",
+  textMid:   "#2e6b88",
+  textMuted: "#7aacbf",
+  teal:      "#0d9488",
+  inputBg:   "rgba(255,255,255,0.85)",
+} as const;
+
+const CLINIC_OPTIONS = ["Dalili Health Clinic", "Sunrise Community Clinic"] as const;
+
+// Satin wave + watermark (web only — degrades gracefully on native)
+function SatinBackground({ scheme }: { scheme: ColorScheme }) {
+  if (typeof document === "undefined") return null;
+  const teal = scheme === "dark" ? "#2DD4BF" : "#0d9488";
+  const waveOpacity = scheme === "dark" ? 0.17 : 0.10;
+  return (
+    <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+      {/* @ts-ignore — SVG renders fine in RN Web */}
+      <svg
+        width="100%" height="100%"
+        viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid slice"
+        style={{ position: "absolute", inset: 0, opacity: waveOpacity }}
+      >
+        <defs>
+          <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stopColor="#2DD4BF" stopOpacity="0.8" />
+            <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.4" />
+          </linearGradient>
+          <linearGradient id="lg2" x1="100%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stopColor="#0d9488" stopOpacity="0.6" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.7" />
+          </linearGradient>
+        </defs>
+        {/* wide satin bands */}
+        <path d="M-200 160 C 200 80,  550 230, 880 130 S1280  60,1680 190" stroke="url(#lg1)" strokeWidth="90" fill="none" opacity="0.65"/>
+        <path d="M-100 400 C 320 310, 680 460,1020 350 S1420 270,1760 410" stroke="url(#lg2)" strokeWidth="70" fill="none" opacity="0.55"/>
+        <path d="M   0 610 C 380 510, 740 660,1080 550 S1460 470,1780 620" stroke="url(#lg1)" strokeWidth="80" fill="none" opacity="0.45"/>
+        <path d="M-120 820 C 280 720, 640 860, 980 760 S1380 680,1700 830" stroke="url(#lg2)" strokeWidth="60" fill="none" opacity="0.50"/>
+        {/* sheen highlights */}
+        <path d="M 350   0 C 520 180,430 400, 660 570 S 760 820, 940 980" stroke="url(#lg2)" strokeWidth="38" fill="none" opacity="0.28"/>
+        <path d="M 980 -30 C1150 150,1060 370,1280 540 S1380 790,1180 980" stroke="url(#lg1)" strokeWidth="30" fill="none" opacity="0.23"/>
+      </svg>
+      {/* DALILI watermark */}
+      {/* @ts-ignore */}
+      <svg
+        width="100%" height="100%"
+        viewBox="0 0 1440 900"
+        preserveAspectRatio="xMidYMid meet"
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <text
+          x="50%" y="52%"
+          dominantBaseline="middle" textAnchor="middle"
+          fontSize="210" fontWeight="900" letterSpacing="28"
+          fill={teal} opacity="0.04"
+          fontFamily="'Outfit','Trebuchet MS',sans-serif"
+        >
+          DALILI
+        </text>
+      </svg>
+    </View>
+  );
+}
 
 export function LoginScreen() {
-  const { baseUrl, setBaseUrl, signIn } = useSession();
-  const autoOpenedFromQrRef = useRef(false);
+  const { baseUrl, signIn } = useSession();
 
-  const [panel, setPanel] = useState<AuthPanel>("LOGIN");
-  const [mode, setMode] = useState<LoginMode>("PATIENT");
+  const [scheme, setScheme]     = useState<ColorScheme>("dark");
+  const [panel,  setPanel]      = useState<AuthPanel>("LOGIN");
+  const [mode,   setMode]       = useState<LoginMode>("PATIENT");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+
   const [adminUsername, setAdminUsername] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  const [setupUsername, setSetupUsername] = useState("");
+
+  const [setupUsername,  setSetupUsername]  = useState("");
   const [setupFirstName, setSetupFirstName] = useState("");
-  const [setupLastName, setSetupLastName] = useState("");
-  const [setupEmail, setSetupEmail] = useState("");
-  const [setupPassword, setSetupPassword] = useState("");
-  const [setupCompany, setSetupCompany] = useState("Dalili Health Clinic");
+  const [setupLastName,  setSetupLastName]  = useState("");
+  const [setupEmail,     setSetupEmail]     = useState("");
+  const [setupPassword,  setSetupPassword]  = useState("");
+  const [setupCompany,   setSetupCompany]   = useState<string>(CLINIC_OPTIONS[0]);
+
   const [bootstrapAllowed, setBootstrapAllowed] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const loginLabel = useMemo(() => {
-    if (mode === "KIOSK") {
-      return "Open Kiosk";
-    }
-    return `${mode} Login`;
-  }, [mode]);
-
-  const openKioskSession = async (requestedBaseUrl?: string | null) => {
-    if (requestedBaseUrl && requestedBaseUrl.trim()) {
-      const normalized = requestedBaseUrl.trim();
-      await setBaseUrl(normalized);
-    }
-    await signIn({
-      token: "kiosk-public-session",
-      actor: "KIOSK",
-      username: "KIOSK",
-      role: "KIOSK"
-    });
-  };
-
-  useEffect(() => {
-    if (typeof window === "undefined" || autoOpenedFromQrRef.current) {
-      return;
-    }
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("kiosk") !== "1") {
-      return;
-    }
-    autoOpenedFromQrRef.current = true;
-    setPanel("LOGIN");
-    setMode("KIOSK");
-    const requestedBaseUrl = params.get("api");
-    setLoading(true);
-    setMessage(null);
-    openKioskSession(requestedBaseUrl)
-      .catch((error) => setMessage(toErrorMessage(error)))
-      .finally(() => setLoading(false));
-  }, [setBaseUrl, signIn]);
+  const T = scheme === "dark" ? DARK : LIGHT;
 
   useEffect(() => {
     let active = true;
-    authApi
-      .getSuperAdminBootstrapStatus(baseUrl)
-      .then((status) => {
-        if (!active) {
-          return;
-        }
-        setBootstrapAllowed(Boolean(status.bootstrapAllowed));
-      })
-      .catch(() => {
-        if (!active) {
-          return;
-        }
-        setBootstrapAllowed(false);
-      });
-    return () => {
-      active = false;
-    };
+    authApi.getSuperAdminBootstrapStatus(baseUrl)
+      .then(s => { if (active) setBootstrapAllowed(Boolean(s.bootstrapAllowed)); })
+      .catch(() => { if (active) setBootstrapAllowed(false); });
+    return () => { active = false; };
   }, [baseUrl]);
 
   useEffect(() => {
-    if (!bootstrapAllowed && panel === "ADMIN_SETUP") {
-      setPanel("LOGIN");
-    }
+    if (!bootstrapAllowed && panel === "ADMIN_SETUP") setPanel("LOGIN");
   }, [bootstrapAllowed, panel]);
 
   const handleLogin = async () => {
     try {
-      setLoading(true);
-      setMessage(null);
-
+      setLoading(true); setMessage(null);
       let token: string | null = null;
-      let actor: LoginMode = mode;
-      let resolvedUsername = username.trim();
       let resolvedRole: string | null = null;
 
       if (mode === "STAFF") {
-        const response = await authApi.loginStaff(baseUrl, username.trim(), password);
-        const role = (response.role || "").toUpperCase();
-        if (role === "ADMIN" || role === "SUPER_ADMIN") {
-          throw new Error("Use the Admin tab for admin accounts.");
-        }
-        token = response.token;
-        resolvedRole = response.role || null;
-      } else if (mode === "PATIENT") {
-        const response = await authApi.loginPatient(baseUrl, username.trim(), password);
-        token = response.token;
-        resolvedRole = response.role || "PATIENT";
+        const r = await authApi.loginStaff(baseUrl, username.trim(), password);
+        if (["ADMIN", "SUPER_ADMIN"].includes((r.role || "").toUpperCase()))
+          throw new Error("Use the Admin panel for admin accounts.");
+        token = r.token;
+        resolvedRole = r.role || null;
       } else {
-        await openKioskSession(null);
-        return;
+        const r = await authApi.loginPatient(baseUrl, username.trim(), password);
+        token = r.token;
+        resolvedRole = r.role || "PATIENT";
       }
 
-      if (!token) {
-        throw new Error("No token returned by backend");
-      }
-
-      await signIn({ token, actor, username: resolvedUsername, role: resolvedRole });
-    } catch (error) {
-      setMessage(toErrorMessage(error));
+      if (!token) throw new Error("No token returned by server");
+      await signIn({ token, actor: mode, username: username.trim(), role: resolvedRole });
+    } catch (e) {
+      setMessage(toErrorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -137,165 +158,245 @@ export function LoginScreen() {
 
   const handleAdminLogin = async () => {
     try {
-      setLoading(true);
-      setMessage(null);
-
-      const response = await authApi.loginStaff(baseUrl, adminUsername.trim(), adminPassword);
-      const resolvedRole = (response.role || "").toUpperCase();
-      if (resolvedRole !== "ADMIN" && resolvedRole !== "SUPER_ADMIN") {
-        throw new Error("This login is only for admin and super-admin accounts.");
-      }
-      if (!response.token) {
-        throw new Error("No token returned by backend");
-      }
-
-      await signIn({
-        token: response.token,
-        actor: "STAFF",
-        username: adminUsername.trim(),
-        role: response.role || null
-      });
-    } catch (error) {
-      setMessage(toErrorMessage(error));
+      setLoading(true); setMessage(null);
+      const r = await authApi.loginStaff(baseUrl, adminUsername.trim(), adminPassword);
+      if (!["ADMIN", "SUPER_ADMIN"].includes((r.role || "").toUpperCase()))
+        throw new Error("Admin accounts only.");
+      if (!r.token) throw new Error("No token returned by server");
+      await signIn({ token: r.token, actor: "STAFF", username: adminUsername.trim(), role: r.role || null });
+    } catch (e) {
+      setMessage(toErrorMessage(e));
     } finally {
       setLoading(false);
     }
   };
 
-  const bootstrapFirstAdmin = async () => {
+  const bootstrapAdmin = async () => {
     try {
-      setLoading(true);
-      setMessage(null);
-      const response = await authApi.bootstrapSuperAdmin(baseUrl, {
-        username: setupUsername.trim(),
-        firstName: setupFirstName.trim(),
-        lastName: setupLastName.trim(),
-        email: setupEmail.trim(),
-        password: setupPassword,
-        company: setupCompany.trim()
+      setLoading(true); setMessage(null);
+      const r = await authApi.bootstrapSuperAdmin(baseUrl, {
+        username: setupUsername.trim(), firstName: setupFirstName.trim(),
+        lastName: setupLastName.trim(), email: setupEmail.trim(),
+        password: setupPassword, company: setupCompany.trim(),
       });
       setBootstrapAllowed(false);
       setPanel("ADMIN_LOGIN");
-      setAdminUsername(response.username || "");
+      setAdminUsername(r.username || "");
       setSetupPassword("");
-      setMessage(`Admin account created. Username: ${response.username}`);
-    } catch (error) {
-      setMessage(toErrorMessage(error));
+      setMessage(`Admin account created. Username: ${r.username}`);
+    } catch (e) {
+      setMessage(toErrorMessage(e));
     } finally {
       setLoading(false);
     }
   };
 
+  const inputStyle = [
+    ls.input,
+    { backgroundColor: T.inputBg, borderColor: T.border, color: T.text },
+  ];
+
+  const isSuccess = !!message?.toLowerCase().includes("created");
+
   return (
-    <AppShell
-      title="Dalili Health Platform"
-      subtitle={`Sign in as patient or staff, or open kiosk mode. API: ${baseUrl}`}
-      rightAction={
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-          {panel === "ADMIN_SETUP" ? (
-            <ActionButton label="Back to Login" onPress={() => setPanel("LOGIN")} variant="ghost" />
-          ) : (
+    <View style={[ls.root, { backgroundColor: T.bg }]}>
+      <SatinBackground scheme={scheme} />
+
+      {/* Theme toggle */}
+      <View style={ls.toggleWrap}>
+        <Pressable
+          onPress={() => setScheme(s => s === "dark" ? "light" : "dark")}
+          style={[ls.toggleBtn, { borderColor: T.border, backgroundColor: T.surface }]}
+        >
+          <Text style={[ls.toggleText, { color: T.textMid }]}>
+            {scheme === "dark" ? "☀ Light" : "◑ Dark"}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View style={ls.centre}>
+        {/* Logo */}
+        <View style={ls.logoRow}>
+          <View style={[ls.ring1, { borderColor: T.teal + "70" }]}>
+            <View style={[ls.ring2, { borderColor: T.teal + "40" }]}>
+              <View style={[ls.dot, { backgroundColor: T.teal }]} />
+            </View>
+          </View>
+          <Text style={[ls.logoText, { color: T.teal }]}>DALILI</Text>
+        </View>
+        <Text style={[ls.byline, { color: T.textMuted }]}>Clinical Platform · Secure Access</Text>
+
+        {/* Card */}
+        <View style={[ls.card, { backgroundColor: T.surface, borderColor: T.border }]}>
+
+          {/* Admin / back row */}
+          <View style={ls.adminRow}>
+            {panel === "ADMIN_SETUP" ? (
+              <Pressable onPress={() => setPanel("LOGIN")}>
+                <Text style={[ls.link, { color: T.teal }]}>← Back to Login</Text>
+              </Pressable>
+            ) : (
+              <>
+                <Pressable onPress={() => setPanel(panel === "ADMIN_LOGIN" ? "LOGIN" : "ADMIN_LOGIN")}>
+                  <Text style={[ls.link, { color: T.teal }]}>
+                    {panel === "ADMIN_LOGIN" ? "← Back" : "Admin →"}
+                  </Text>
+                </Pressable>
+                {bootstrapAllowed && (
+                  <Pressable onPress={() => setPanel("ADMIN_SETUP")} style={{ marginLeft: 16 }}>
+                    <Text style={[ls.link, { color: T.teal }]}>First-Time Setup</Text>
+                  </Pressable>
+                )}
+              </>
+            )}
+          </View>
+
+          {/* ── MAIN LOGIN ── */}
+          {panel === "LOGIN" && (
             <>
-              <ActionButton
-                label={panel === "ADMIN_LOGIN" ? "Back to Login" : "Admin"}
-                onPress={() => setPanel(panel === "ADMIN_LOGIN" ? "LOGIN" : "ADMIN_LOGIN")}
-                variant="ghost"
+              {/* PATIENT / STAFF only — no kiosk */}
+              <View style={ls.chips}>
+                {(["PATIENT", "STAFF"] as LoginMode[]).map(m => (
+                  <Pressable
+                    key={m}
+                    onPress={() => { setMode(m); setMessage(null); }}
+                    style={[
+                      ls.chip,
+                      { borderColor: mode === m ? T.teal : T.border },
+                      mode === m ? { backgroundColor: T.teal } : { backgroundColor: "transparent" },
+                    ]}
+                  >
+                    <Text style={[ls.chipText, { color: mode === m ? (scheme === "dark" ? "#0b1623" : "#fff") : T.textMuted }]}>
+                      {m}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={[ls.label, { color: T.textMuted }]}>Username</Text>
+              <TextInput
+                value={username}
+                onChangeText={v => { setUsername(v); setMessage(null); }}
+                placeholder={mode === "STAFF" ? "CL-001 or NS-001" : "Patient username"}
+                placeholderTextColor={T.textMuted}
+                style={inputStyle}
               />
-              {bootstrapAllowed ? (
-                <ActionButton
-                  label="Create First Admin"
-                  onPress={() => setPanel("ADMIN_SETUP")}
-                  variant="ghost"
-                />
-              ) : null}
+
+              <Text style={[ls.label, { color: T.textMuted }]}>Password</Text>
+              <TextInput
+                value={password}
+                onChangeText={v => { setPassword(v); setMessage(null); }}
+                placeholder="••••••••"
+                placeholderTextColor={T.textMuted}
+                secureTextEntry
+                onSubmitEditing={handleLogin}
+                style={inputStyle}
+              />
+
+              {message ? <Text style={[ls.msg, { color: isSuccess ? T.teal : "#f87171" }]}>{message}</Text> : null}
+
+              <Pressable
+                onPress={handleLogin}
+                disabled={loading}
+                style={[ls.btn, { backgroundColor: loading ? T.border : T.teal }]}
+              >
+                {loading
+                  ? <ActivityIndicator color={T.textMuted} size="small" />
+                  : <Text style={[ls.btnText, { color: scheme === "dark" ? "#0b1623" : "#fff" }]}>Sign In →</Text>
+                }
+              </Pressable>
+            </>
+          )}
+
+          {/* ── ADMIN LOGIN ── */}
+          {panel === "ADMIN_LOGIN" && (
+            <>
+              <Text style={[ls.label, { color: T.textMuted }]}>Username</Text>
+              <TextInput value={adminUsername} onChangeText={setAdminUsername}
+                placeholder="AD-001 or SA-001" placeholderTextColor={T.textMuted} style={inputStyle} />
+              <Text style={[ls.label, { color: T.textMuted }]}>Password</Text>
+              <TextInput value={adminPassword} onChangeText={setAdminPassword}
+                placeholder="password" placeholderTextColor={T.textMuted} secureTextEntry
+                onSubmitEditing={handleAdminLogin} style={inputStyle} />
+              {message ? <Text style={[ls.msg, { color: isSuccess ? T.teal : "#f87171" }]}>{message}</Text> : null}
+              <Pressable onPress={handleAdminLogin} disabled={loading}
+                style={[ls.btn, { backgroundColor: loading ? T.border : T.teal }]}>
+                {loading
+                  ? <ActivityIndicator color={T.textMuted} size="small" />
+                  : <Text style={[ls.btnText, { color: scheme === "dark" ? "#0b1623" : "#fff" }]}>Admin Sign In →</Text>
+                }
+              </Pressable>
+            </>
+          )}
+
+          {/* ── ADMIN SETUP ── */}
+          {panel === "ADMIN_SETUP" && bootstrapAllowed && (
+            <>
+              {([
+                ["Username (SA…)", setupUsername,  setSetupUsername,  "SA-001",              false],
+                ["First Name",     setupFirstName, setSetupFirstName, "Jane",                false],
+                ["Last Name",      setupLastName,  setSetupLastName,  "Doe",                 false],
+                ["Email",          setupEmail,     setSetupEmail,     "jane@clinic.com",     false],
+                ["Password",       setupPassword,  setSetupPassword,  "Min. 8 characters",   true ],
+              ] as [string, string, (v: string) => void, string, boolean][]).map(([lbl, val, setter, ph, sec]) => (
+                <View key={lbl}>
+                  <Text style={[ls.label, { color: T.textMuted }]}>{lbl}</Text>
+                  <TextInput value={val} onChangeText={setter} placeholder={ph}
+                    placeholderTextColor={T.textMuted} secureTextEntry={sec} style={inputStyle} />
+                </View>
+              ))}
+
+              <Text style={[ls.label, { color: T.textMuted, marginTop: 4 }]}>Company / Clinic</Text>
+              <View style={ls.chips}>
+                {CLINIC_OPTIONS.map(c => (
+                  <Pressable key={c} onPress={() => setSetupCompany(c)}
+                    style={[ls.chip, { borderColor: setupCompany === c ? T.teal : T.border, flex: 1 },
+                      setupCompany === c ? { backgroundColor: T.teal } : { backgroundColor: "transparent" }]}>
+                    <Text style={[ls.chipText, { color: setupCompany === c ? "#fff" : T.textMuted, fontSize: 11 }]}>{c}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {message ? <Text style={[ls.msg, { color: isSuccess ? T.teal : "#f87171" }]}>{message}</Text> : null}
+              <Pressable onPress={bootstrapAdmin} disabled={loading}
+                style={[ls.btn, { backgroundColor: loading ? T.border : T.teal }]}>
+                {loading
+                  ? <ActivityIndicator color={T.textMuted} size="small" />
+                  : <Text style={[ls.btnText, { color: scheme === "dark" ? "#0b1623" : "#fff" }]}>Create Admin Account</Text>
+                }
+              </Pressable>
             </>
           )}
         </View>
-      }
-    >
-      {panel === "ADMIN_SETUP" && bootstrapAllowed ? (
-        <Card title="Create First Admin">
-          <InputField label="Username (SA...)" value={setupUsername} onChangeText={setSetupUsername} placeholder="SA-001" />
-          <InputField label="First Name" value={setupFirstName} onChangeText={setSetupFirstName} placeholder="Jane" />
-          <InputField label="Last Name" value={setupLastName} onChangeText={setSetupLastName} placeholder="Doe" />
-          <InputField label="Email" value={setupEmail} onChangeText={setSetupEmail} placeholder="jane@clinic.com" />
-          <InputField
-            label="Password"
-            value={setupPassword}
-            onChangeText={setSetupPassword}
-            secureTextEntry
-            placeholder="At least 8 characters"
-            onSubmitEditing={bootstrapFirstAdmin}
-          />
-          <ChoiceChips
-            label="Company / Clinic Name"
-            options={clinicOptions}
-            value={setupCompany}
-            onChange={(value) => setSetupCompany(value)}
-          />
-          <InlineActions>
-            <ActionButton label="Create Admin" onPress={bootstrapFirstAdmin} disabled={loading} />
-            {loading ? <ActivityIndicator color={colors.primary} /> : null}
-          </InlineActions>
-          <MessageBanner message={message} tone={message && message.toLowerCase().includes("created") ? "success" : "error"} />
-        </Card>
-      ) : panel === "ADMIN_LOGIN" ? (
-        <Card title="Admin Login">
-          <InputField
-            label="Username"
-            value={adminUsername}
-            onChangeText={setAdminUsername}
-            placeholder="AD-001 or SA-001"
-          />
-          <InputField
-            label="Password"
-            value={adminPassword}
-            onChangeText={setAdminPassword}
-            secureTextEntry
-            placeholder="password"
-            onSubmitEditing={handleAdminLogin}
-          />
-          <InlineActions>
-            <ActionButton label="Login" onPress={handleAdminLogin} disabled={loading} />
-            {loading ? <ActivityIndicator color={colors.primary} /> : null}
-          </InlineActions>
-          <MessageBanner message={message} tone="error" />
-        </Card>
-      ) : (
-        <Card title="Authenticate">
-          <ChoiceChips label="Mode" options={["PATIENT", "KIOSK", "STAFF"]} value={mode} onChange={(value) => setMode(value as LoginMode)} />
 
-          {mode === "KIOSK" ? (
-            <View style={{ gap: 10 }}>
-              <MessageBanner
-                message="Kiosk mode is public and does not require login."
-                tone="info"
-              />
-              <Text style={{ color: colors.textMuted }}>
-                After opening kiosk mode, patients will choose Existing Appointment or No Appointment.
-              </Text>
-            </View>
-          ) : (
-            <View style={{ gap: 10 }}>
-              <InputField label="Username" value={username} onChangeText={setUsername} placeholder="username" />
-              <InputField
-                label="Password"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-                placeholder="password"
-                onSubmitEditing={handleLogin}
-              />
-            </View>
-          )}
-
-          <InlineActions>
-            <ActionButton label={loginLabel} onPress={handleLogin} disabled={loading} />
-            {loading ? <ActivityIndicator color={colors.primary} /> : null}
-          </InlineActions>
-          <MessageBanner message={message} tone={message && message.toLowerCase().includes("saved") ? "success" : "error"} />
-        </Card>
-      )}
-    </AppShell>
+        <Text style={[ls.footer, { color: T.textMuted }]}>© 2026 Dalili Health</Text>
+      </View>
+    </View>
   );
 }
+
+const ls = StyleSheet.create({
+  root:       { flex: 1 },
+  toggleWrap: { position: "absolute", top: 18, right: 22, zIndex: 20 },
+  toggleBtn:  { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5 },
+  toggleText: { fontSize: 12, fontWeight: "600" },
+  centre:     { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
+  logoRow:    { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 },
+  ring1:      { width: 44, height: 44, borderRadius: 22, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
+  ring2:      { width: 30, height: 30, borderRadius: 15, borderWidth: 1.2, alignItems: "center", justifyContent: "center" },
+  dot:        { width: 10, height: 10, borderRadius: 5 },
+  logoText:   { fontSize: 32, fontWeight: "900", letterSpacing: 6 },
+  byline:     { fontSize: 12, letterSpacing: 0.4, marginBottom: 22 },
+  card:       { width: "100%", maxWidth: 400, borderRadius: 18, borderWidth: 1, padding: 26 },
+  adminRow:   { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  link:       { fontSize: 12, fontWeight: "600" },
+  chips:      { flexDirection: "row", gap: 6, marginBottom: 16 },
+  chip:       { flex: 1, paddingVertical: 8, paddingHorizontal: 6, borderRadius: 8, borderWidth: 1.5, alignItems: "center" },
+  chipText:   { fontSize: 12, fontWeight: "700" },
+  label:      { fontSize: 10, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6, marginTop: 2 },
+  input:      { borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, marginBottom: 12 },
+  msg:        { fontSize: 13, marginBottom: 10, textAlign: "center" },
+  btn:        { borderRadius: 10, paddingVertical: 13, alignItems: "center", justifyContent: "center", marginTop: 2 },
+  btnText:    { fontSize: 14, fontWeight: "700", letterSpacing: 0.3 },
+  footer:     { marginTop: 18, fontSize: 11 },
+});
