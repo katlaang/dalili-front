@@ -14,6 +14,11 @@ import {
 import { triagePalette } from "../../constants/theme";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
+import {
+  getPrimaryVulnerabilityColor,
+  getVulnerabilityBadgeColors,
+  getVulnerabilityMarkers,
+} from "../../utils/vulnerability";
 
 // ─── ENCOUNTERS SCREEN ────────────────────────────────────────────────────────
 //
@@ -146,9 +151,10 @@ function HistoryPanel({ preview, T, scheme }: {
     );
   }
 
-  const triage     = preview.triage as Record<string, any> | null;
-  const q          = preview.queue  as Record<string, any> | null;
-  const patientMrn = (preview.patient as any)?.mrn || null;
+  const patient = preview.patient || null;
+  const triage = preview.triage || null;
+  const q = preview.queue || null;
+  const patientMrn = patient?.mrn || null;
 
   // Once triage completes the MRN is the primary identifier.
   // The queue ticket number is shown only as historical context.
@@ -164,6 +170,17 @@ function HistoryPanel({ preview, T, scheme }: {
 
   const tlKey = ((q?.triageLevel || triage?.finalTriageLevel || "").toUpperCase()) as TriageKey;
   const tlPal = triagePalette[tlKey];
+  const vulnerabilityMarkers = getVulnerabilityMarkers({
+    dateOfBirth: patient?.dateOfBirth || q?.patientDateOfBirth,
+    ageYears: patient?.ageYears ?? q?.patientAgeYears,
+    ageInDays: q?.patientAgeInDays,
+    pregnancyStatus: triage?.pregnancyStatus || q?.pregnancyStatus,
+    isPregnant: triage?.pregnant ?? q?.isPregnant,
+    newborn: triage?.newborn,
+    elderly: triage?.elderly,
+    vulnerabilityIndicators: triage?.vulnerabilityIndicators || q?.vulnerabilityIndicators,
+  });
+  const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
 
   return (
     <ScrollView contentContainerStyle={{ gap: 12 }}>
@@ -202,6 +219,76 @@ function HistoryPanel({ preview, T, scheme }: {
           </View>
         ) : null}
       </Card>
+
+      {(patient?.fullName || patient?.dateOfBirth || vulnerabilityMarkers.length > 0) ? (
+        <Card title="Patient Summary">
+          <View
+            style={[
+              es.infoBox,
+              es.patientSummaryBox,
+              {
+                backgroundColor: T.surfaceAlt as string,
+                borderColor: T.borderLight,
+                borderLeftColor: vulnerabilityAccent || T.borderLight,
+              },
+            ]}
+          >
+            {patient?.fullName ? (
+              <Text style={[es.patientSummaryName, { color: T.text }]}>{patient.fullName}</Text>
+            ) : null}
+            <View style={es.patientSummaryMeta}>
+              {patient?.mrn ? (
+                <Text style={[es.patientSummaryMetaText, { color: T.textMid }]}>Patient ID {patient.mrn}</Text>
+              ) : null}
+              {patient?.dateOfBirth ? (
+                <Text style={[es.patientSummaryMetaText, { color: T.textMid }]}>
+                  DOB {new Date(patient.dateOfBirth).toLocaleDateString("en-US", {
+                    month: "long",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </Text>
+              ) : null}
+              {typeof patient?.ageYears === "number" ? (
+                <Text style={[es.patientSummaryMetaText, { color: T.textMid }]}>
+                  Age {patient.ageYears}
+                </Text>
+              ) : null}
+              {triage?.pregnancyStatus ? (
+                <Text style={[es.patientSummaryMetaText, { color: T.textMid }]}>
+                  Pregnancy {triage.pregnancyStatus.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, char => char.toUpperCase())}
+                </Text>
+              ) : null}
+            </View>
+            {vulnerabilityMarkers.length > 0 ? (
+              <View style={es.vulnerabilityWrap}>
+                {vulnerabilityMarkers.map(marker => {
+                  const colors = getVulnerabilityBadgeColors(marker.tone);
+                  return (
+                    <View
+                      key={marker.key}
+                      style={[
+                        es.vulnerabilityBadge,
+                        {
+                          backgroundColor: colors.backgroundColor,
+                          borderColor: colors.borderColor,
+                        },
+                      ]}
+                    >
+                      <Text style={[es.vulnerabilityBadgeText, { color: colors.color }]}>{marker.label}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+            {triage?.vulnerabilityNotes ? (
+              <Text style={[es.patientSummaryNote, { color: T.text }]}>
+                {triage.vulnerabilityNotes}
+              </Text>
+            ) : null}
+          </View>
+        </Card>
+      ) : null}
 
       {triage?.chiefComplaint ? (
         <Card title="Chief Complaint">
@@ -789,7 +876,12 @@ export function EncountersScreen({
             <InlineActions>
               <ActionButton
                 label="✉ Message Patient"
-                onPress={() => onOpenMessaging(q?.patientId || "", triage?.chiefComplaint || "Patient")}
+                onPress={() =>
+                  onOpenMessaging(
+                    q?.patientId || "",
+                    (preview?.patient as { fullName?: string } | undefined)?.fullName || q?.patientName || "Patient"
+                  )
+                }
                 variant="secondary"
               />
             </InlineActions>
@@ -1075,6 +1167,14 @@ const es = StyleSheet.create({
   triagePill:        { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1.5 },
   infoRow:           { borderWidth: 1, borderRadius: 8, padding: 10, gap: 3 },
   infoBox:           { borderWidth: 1, borderRadius: 10, padding: 12 },
+  patientSummaryBox: { borderLeftWidth: 4, gap: 10 },
+  patientSummaryName:{ fontSize: 18, fontWeight: "800" },
+  patientSummaryMeta:{ flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  patientSummaryMetaText: { fontSize: 12, fontWeight: "600" },
+  patientSummaryNote:{ fontSize: 13, lineHeight: 19 },
+  vulnerabilityWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  vulnerabilityBadge:{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
+  vulnerabilityBadgeText: { fontSize: 10, fontWeight: "700" },
   vitalsGrid:        { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   vitalCard:         { width: "30%", minWidth: 80, borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 },
   vitalLabel:        { fontSize: 10, fontWeight: "700" },

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { facilityApi, patientAppointmentApi, queueApi } from "../../api/services";
+import { facilityApi, patientApi, queueApi } from "../../api/services";
 import type { QueueTicket } from "../../api/types";
 import { queueCategoryOptions, triageLevelOptions } from "../../config/options";
 import {
@@ -16,6 +16,11 @@ import {
 import { triagePalette } from "../../constants/theme";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
+import {
+  getPrimaryVulnerabilityColor,
+  getVulnerabilityBadgeColors,
+  getVulnerabilityMarkers,
+} from "../../utils/vulnerability";
 
 // ─── QUEUE SCREEN ─────────────────────────────────────────────────────────────
 // Two completely separate queues:
@@ -33,7 +38,6 @@ interface QueueScreenProps {
   onMoveToTriage?:    (ticketId: string) => void;
   onMoveToEncounter?: (ticketId: string) => void;
   onOpenMessaging?:   (patientId: string, patientName: string) => void;
-  onBookAppointment?: () => void;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -77,6 +81,36 @@ function TriageBadge({ level, scheme }: { level?: string | null; scheme: "dark" 
   );
 }
 
+function VulnerabilityBadges({
+  markers,
+}: {
+  markers: ReturnType<typeof getVulnerabilityMarkers>;
+}) {
+  if (markers.length === 0) return null;
+
+  return (
+    <View style={qss.vulnerabilityWrap}>
+      {markers.map(marker => {
+        const colors = getVulnerabilityBadgeColors(marker.tone);
+        return (
+          <View
+            key={marker.key}
+            style={[
+              qss.vulnerabilityBadge,
+              {
+                backgroundColor: colors.backgroundColor,
+                borderColor: colors.borderColor,
+              },
+            ]}
+          >
+            <Text style={[qss.vulnerabilityBadgeText, { color: colors.color }]}>{marker.label}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 // ─── Patient Profile Modal (nurse + physician only) ───────────────────────────
 interface ProfileModalProps {
   ticket:    QueueTicket;
@@ -91,6 +125,17 @@ interface ProfileModalProps {
 function PatientProfileModal({ ticket, onClose, onTriage, onEncounter, onMessage, scheme, T }: ProfileModalProps) {
   const name = ticket.patientName || ticket.patientId || "Patient";
   const vitals = (ticket as any).latestVitals || null;
+  const vulnerabilityMarkers = getVulnerabilityMarkers({
+    dateOfBirth: ticket.patientDateOfBirth,
+    ageYears: ticket.patientAgeYears,
+    ageInDays: ticket.patientAgeInDays,
+    pregnancyStatus: ticket.pregnancyStatus,
+    isPregnant: ticket.isPregnant,
+    newborn: ticket.newborn,
+    elderly: ticket.elderly,
+    vulnerabilityIndicators: ticket.vulnerabilityIndicators,
+  });
+  const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
 
   const vitalColor = (val: number | null | undefined, low: number, high: number) => {
     if (val == null) return T.textMuted;
@@ -116,6 +161,7 @@ function PatientProfileModal({ ticket, onClose, onTriage, onEncounter, onMessage
                   ? `  ·  Appointment ${formatTime(ticket.appointmentScheduledAt)}`
                   : "  ·  Walk-in"}
               </Text>
+              <VulnerabilityBadges markers={vulnerabilityMarkers} />
             </View>
             <Pressable onPress={onClose} style={qss.closeBtn}>
               <Text style={[qss.closeBtnText, { color: T.teal }]}>✕ Close</Text>
@@ -128,6 +174,25 @@ function PatientProfileModal({ ticket, onClose, onTriage, onEncounter, onMessage
               <View style={qss.modalSection}>
                 <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>TRIAGE LEVEL</Text>
                 <TriageBadge level={ticket.triageLevel} scheme={scheme} />
+              </View>
+            ) : null}
+
+            {vulnerabilityMarkers.length > 0 ? (
+              <View style={qss.modalSection}>
+                <Text style={[qss.modalSectionTitle, { color: T.textMid }]}>VULNERABILITY MARKERS</Text>
+                <View
+                  style={[
+                    qss.infoBox,
+                    qss.vulnerabilityPanel,
+                    {
+                      backgroundColor: T.surfaceAlt as string,
+                      borderColor: T.borderLight,
+                      borderLeftColor: vulnerabilityAccent || T.borderLight,
+                    },
+                  ]}
+                >
+                  <VulnerabilityBadges markers={vulnerabilityMarkers} />
+                </View>
               </View>
             ) : null}
 
@@ -242,6 +307,17 @@ function QueueRow({
   const key = (ticket.triageLevel?.toUpperCase() || "") as TriageKey;
   const pal = triagePalette[key];
   const borderColor = pal?.border || T.border;
+  const vulnerabilityMarkers = getVulnerabilityMarkers({
+    dateOfBirth: ticket.patientDateOfBirth,
+    ageYears: ticket.patientAgeYears,
+    ageInDays: ticket.patientAgeInDays,
+    pregnancyStatus: ticket.pregnancyStatus,
+    isPregnant: ticket.isPregnant,
+    newborn: ticket.newborn,
+    elderly: ticket.elderly,
+    vulnerabilityIndicators: ticket.vulnerabilityIndicators,
+  });
+  const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
 
   return (
     <View style={[qss.row, {
@@ -269,6 +345,10 @@ function QueueRow({
 
       {/* Centre: name / appointment label */}
       <View style={qss.rowCentre}>
+        {vulnerabilityAccent ? (
+          <View style={[qss.vulnerabilityAccentBlock, { borderLeftColor: vulnerabilityAccent }]} />
+        ) : null}
+        <VulnerabilityBadges markers={vulnerabilityMarkers} />
         <Text style={[qss.rowName, { color: T.text }]} numberOfLines={1}>
           {ticket.patientName || ticket.patientId || "—"}
         </Text>
@@ -304,7 +384,7 @@ function QueueRow({
 }
 
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
-export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging, onBookAppointment }: QueueScreenProps) {
+export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging }: QueueScreenProps) {
   const { apiContext, role } = useSession();
   const { theme: T } = useTheme();
 
@@ -328,7 +408,6 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   const [issueComplaint,   setIssueComplaint]   = useState("");
   const [issueEmergency,   setIssueEmergency]   = useState(false);
   const [emergencyEnabled, setEmergencyEnabled] = useState(true);
-  const [apptEnabled,      setApptEnabled]      = useState(true);
 
   // Call-next counters
   const [triageCounter, setTriageCounter]       = useState("Triage Room 1");
@@ -341,17 +420,13 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   const [admitReason, setAdmitReason] = useState("");
   const [latestTicket, setLatestTicket] = useState<unknown>(null);
 
-  // Appointment booking (receptionist + nurse)
-  const [bookingPatientId, setBookingPatientId] = useState("");
-  const [bookingNote, setBookingNote] = useState("");
-
   const err = (e: unknown) => { setMessage(toErrorMessage(e)); setTone("error"); };
   const ok  = (s: string)  => { setMessage(s); setTone("success"); };
 
   useEffect(() => {
     if (!apiContext) return;
     facilityApi.getWorkflowConfig(apiContext)
-      .then(c => { setEmergencyEnabled(c.emergencyFlowEnabled); setApptEnabled(c.appointmentFlowEnabled); })
+      .then(c => { setEmergencyEnabled(c.emergencyFlowEnabled); })
       .catch(() => {});
   }, [apiContext]);
 
@@ -394,9 +469,10 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   const issueTicket = async () => {
     if (!apiContext) return;
     try {
+      const patient = await patientApi.getByMrn(apiContext, issuePatientId.trim());
       const t = issueEmergency
-        ? await queueApi.issueEmergencyTicket(apiContext, { patientId: issuePatientId.trim(), initialComplaint: issueComplaint })
-        : await queueApi.issueTicket(apiContext, { patientId: issuePatientId.trim(), category: issueCategory, initialComplaint: isReceptionist ? null : issueComplaint || null });
+        ? await queueApi.issueEmergencyTicket(apiContext, { patientId: patient.id, initialComplaint: issueComplaint })
+        : await queueApi.issueTicket(apiContext, { patientId: patient.id, category: issueCategory, initialComplaint: isReceptionist ? null : issueComplaint || null });
       setLatestTicket(t); setTicketId(t.id);
       ok(issueEmergency ? "Emergency ticket issued" : "Ticket issued");
     } catch (e) { err(e); }
@@ -503,8 +579,8 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
           ))}
         </View>
         <InlineActions>
-          <ActionButton label="Load Queue" onPress={loadQueue} />
-          <ActionButton label="Stats" onPress={loadStats} variant="secondary" />
+          <ActionButton label="Refresh Queue" onPress={loadQueue} />
+          <ActionButton label="Queue Stats" onPress={loadStats} variant="secondary" />
         </InlineActions>
         <MessageBanner message={message} tone={tone} />
       </Card>
@@ -529,7 +605,7 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
 
       {/* Issue ticket — all roles */}
       <Card title="Issue Ticket">
-        <InputField label="Patient UUID" value={issuePatientId} onChangeText={setIssuePatientId} />
+        <InputField label="Patient ID" value={issuePatientId} onChangeText={setIssuePatientId} />
         <ChoiceChips label="Category" options={queueCategoryOptions} value={issueCategory} onChange={setIssueCategory} />
         {!isReceptionist ? (
           <InputField label="Chief Complaint" value={issueComplaint} onChangeText={setIssueComplaint} multiline />
@@ -553,16 +629,6 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
       </Card>
 
       {/* Appointment booking — receptionist + nurse */}
-      {(isReceptionist || isNurse) ? (
-        <Card title="Book Appointment">
-          <InputField label="Patient UUID" value={bookingPatientId} onChangeText={setBookingPatientId} />
-          <InputField label="Reason / Notes" value={bookingNote} onChangeText={setBookingNote} multiline />
-          <InlineActions>
-            <ActionButton label="Open Appointment Booking" onPress={() => onBookAppointment?.()} />
-          </InlineActions>
-        </Card>
-      ) : null}
-
       {/* Call Next */}
       <Card title="Call Next">
         {!isPhysician ? (
@@ -585,8 +651,9 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
       </Card>
 
       {/* Ticket Actions */}
+      {!canClinical ? (
       <Card title="Ticket Actions">
-        <InputField label="Ticket UUID" value={ticketId} onChangeText={setTicketId} />
+        <InputField label="Selected Ticket" value={ticketId} onChangeText={setTicketId} />
         <InlineActions>
           <ActionButton label="Start Session"     onPress={() => ticketAction("start")}          variant="secondary" />
           <ActionButton label="Return to Waiting" onPress={() => ticketAction("return_waiting")} variant="secondary" />
@@ -602,9 +669,12 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
         <InlineActions>
           <ActionButton label="Escalate Priority" onPress={escalate} variant="danger" />
           <ActionButton label="→ Triage"          onPress={() => { if (ticketId.trim()) { onMoveToTriage?.(ticketId.trim()); }}}   variant="secondary" />
-          <ActionButton label="→ Encounter"       onPress={() => { if (ticketId.trim()) { onMoveToEncounter?.(ticketId.trim()); }}} variant="secondary" />
+          {onMoveToEncounter ? (
+            <ActionButton label="→ Encounter" onPress={() => { if (ticketId.trim()) { onMoveToEncounter(ticketId.trim()); }}} variant="secondary" />
+          ) : null}
         </InlineActions>
       </Card>
+      ) : null}
 
       {stats ? (
         <Card title="Queue Stats"><JsonPanel value={stats} /></Card>
@@ -625,9 +695,15 @@ const qss = StyleSheet.create({
   rowLeft:       { width: 70, gap: 5, alignItems: "flex-start" },
   rowTicket:     { fontSize: 14, fontWeight: "800" },
   rowCentre:     { flex: 1, gap: 4 },
+  rowNameWrap:   { flexDirection: "row", alignItems: "center", gap: 8 },
   rowName:       { fontSize: 14, fontWeight: "700" },
   rowSub:        { fontSize: 11 },
   rowComplaint:  { fontSize: 12 },
+  vulnerabilityAccent: { width: 4, minHeight: 18, borderRadius: 999 },
+  vulnerabilityAccentBlock: { alignSelf: "stretch", borderLeftWidth: 4, borderRadius: 999, minHeight: 18 },
+  vulnerabilityWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  vulnerabilityBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
+  vulnerabilityBadgeText: { fontSize: 10, fontWeight: "700" },
   rowRight:      { alignItems: "flex-end", gap: 6 },
   rowWait:       { fontSize: 11 },
   viewBtn:       { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 7 },
@@ -646,6 +722,7 @@ const qss = StyleSheet.create({
   modalSection:  { gap: 6 },
   modalSectionTitle: { fontSize: 10, fontWeight: "700", letterSpacing: 1 },
   infoBox:       { borderWidth: 1, borderRadius: 10, padding: 12 },
+  vulnerabilityPanel: { borderLeftWidth: 4 },
   vitalsGrid:    { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   vitalCard:     { width: "30%", minWidth: 80, borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 },
   vitalLabel:    { fontSize: 10, fontWeight: "700" },

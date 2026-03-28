@@ -10,8 +10,7 @@ import { toErrorMessage } from "../../utils/format";
 // Always uses the light colour scheme.
 // Auto-resets after 3 minutes of inactivity.
 
-type Screen      = "home" | "appt-method" | "appt-number" | "appt-name" | "walkin" | "success-appt" | "success-walkin";
-type ApptMethod  = "number" | "name";
+type Screen = "home" | "appt-method" | "appt-number" | "appt-name" | "walkin" | "printing";
 
 const TEAL   = "#0d9488";
 const TEAL_D = "#0f766e";
@@ -24,6 +23,7 @@ const TXT3   = "#7aacbf";
 const BDR    = "#c8dfe9";
 const RED    = "#dc2626";
 const RED_BG = "#fef2f2";
+const DOB_PLACEHOLDER = "MM/DD/YYYY";
 
 // Satin wave + watermark (web only)
 function SatinBackground() {
@@ -87,6 +87,172 @@ function KioskInput({
   );
 }
 
+const formatDobInput = (value: string) => {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const isoToDobDisplay = (iso: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${month}/${day}/${year}`;
+};
+
+const isoToDobLongDisplay = (iso: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!match) return "";
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+};
+
+const dobDisplayToIso = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  const displayMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
+  if (displayMatch) {
+    const [, monthValue, dayValue, yearValue] = displayMatch;
+    const month = Number(monthValue);
+    const day = Number(dayValue);
+    const year = Number(yearValue);
+
+    if (month < 1 || month > 12) {
+      throw new Error("Month must be between 01 and 12.");
+    }
+
+    const lastDayOfMonth = new Date(year, month, 0).getDate();
+    if (day < 1 || day > lastDayOfMonth) {
+      throw new Error("Please enter a valid calendar date.");
+    }
+
+    return `${yearValue}-${monthValue}-${dayValue}`;
+  }
+
+  if (trimmed.includes("/")) {
+    throw new Error(`Please enter date of birth as ${DOB_PLACEHOLDER}.`);
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Please enter date of birth as ${DOB_PLACEHOLDER}.`);
+  }
+
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const tryDobToIso = (value: string) => {
+  try {
+    return dobDisplayToIso(value);
+  } catch {
+    return "";
+  }
+};
+
+function DateOfBirthInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const textInputRef = useRef<TextInput | null>(null);
+  const webDateInputRef = useRef<HTMLInputElement | null>(null);
+  const WebInput = "input" as any;
+  const isoValue = tryDobToIso(value);
+  const longDisplay = isoValue ? isoToDobLongDisplay(isoValue) : "";
+  const showLongDisplay = !isEditing && !!longDisplay;
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const timeoutId = setTimeout(() => textInputRef.current?.focus(), 0);
+    return () => clearTimeout(timeoutId);
+  }, [isEditing]);
+
+  const openCalendar = () => {
+    const input = webDateInputRef.current;
+    if (!input) return;
+
+    if (typeof (input as HTMLInputElement & { showPicker?: () => void }).showPicker === "function") {
+      (input as HTMLInputElement & { showPicker: () => void }).showPicker();
+      return;
+    }
+
+    input.focus();
+    input.click();
+  };
+
+  return (
+    <View style={ks.field}>
+      <Text style={ks.fieldLabel}>{label}</Text>
+      <View style={ks.dateRow}>
+        {showLongDisplay ? (
+          <Pressable onPress={() => setIsEditing(true)} style={[ks.fieldInput, ks.dateTextInput, ks.dateReadonlyField]}>
+            <Text style={ks.dateReadonlyText}>{longDisplay}</Text>
+          </Pressable>
+        ) : (
+          <TextInput
+            ref={textInputRef}
+            value={value}
+            onFocus={() => setIsEditing(true)}
+            onBlur={() => setIsEditing(false)}
+            onChangeText={text => onChange(formatDobInput(text))}
+            placeholder={DOB_PLACEHOLDER}
+            placeholderTextColor={TXT3}
+            keyboardType="number-pad"
+            maxLength={10}
+            style={[ks.fieldInput, ks.dateTextInput]}
+          />
+        )}
+        {typeof document !== "undefined" ? (
+          <View style={ks.calendarWrap}>
+            <Pressable onPress={openCalendar} style={ks.calendarBtn}>
+              <Text style={ks.calendarBtnText}>📅</Text>
+            </Pressable>
+            <WebInput
+              type="date"
+              ref={(node: HTMLInputElement | null) => {
+                webDateInputRef.current = node;
+              }}
+              value={isoValue}
+              onChange={(event: { target: { value: string } }) => {
+                onChange(isoToDobDisplay(event.target.value));
+                setIsEditing(false);
+              }}
+              aria-label={label}
+              tabIndex={-1}
+              style={{
+                position: "absolute",
+                width: 1,
+                height: 1,
+                opacity: 0,
+                pointerEvents: "none",
+              }}
+            />
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 // Big tap button
 function BigButton({
   icon, label, sublabel, onPress, primary = false,
@@ -125,9 +291,11 @@ function SuccessScreen({
   onPrint: () => void;
 }) {
   return (
-    <View style={ks.successWrap}>
-      <Text style={ks.successLabel}>Your queue number is</Text>
-      <Text style={ks.successNumber}>{ticketNumber}</Text>
+    <View style={ks.printingWrap}>
+      <Text style={ks.printingTitle}>Printing Queue Number</Text>
+      <Text style={ks.printingHint}>
+        Please wait while your ticket prints. This kiosk will return to the welcome screen automatically.
+      </Text>
 
       {/* Full date-scoped reference — uniquely identifies this visit across days */}
       {trackingNumber && trackingNumber !== ticketNumber ? (
@@ -158,6 +326,43 @@ function SuccessScreen({
   );
 }
 
+function PrintingScreen({
+  ticketNumber,
+  trackingNumber,
+  isAppointment,
+}: {
+  ticketNumber: string;
+  trackingNumber?: string | null;
+  isAppointment: boolean;
+}) {
+  return (
+    <View style={ks.printingWrap}>
+      <Text style={ks.printingTitle}>Printing Queue Number</Text>
+      <Text style={ks.printingHint}>
+        Please wait while your ticket prints. This kiosk will return to the welcome screen automatically.
+      </Text>
+
+      <View nativeID="kiosk-print-root" style={ks.printTicketCard}>
+        <Text style={ks.printTicketFacility}>DALILI</Text>
+        <Text style={ks.printTicketLabel}>Queue Number</Text>
+        <Text style={ks.printTicketNumber}>{ticketNumber}</Text>
+        {trackingNumber && trackingNumber !== ticketNumber ? (
+          <Text style={ks.printTicketRef}>Ref: {trackingNumber}</Text>
+        ) : null}
+        {isAppointment ? (
+          <Text style={ks.printTicketPriority}>Appointment check-in</Text>
+        ) : null}
+      </View>
+
+      <View style={ks.apptNote}>
+        <Text style={ks.apptNoteText}>
+          After printing, the kiosk will be ready for the next patient.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function KioskWorkspaceScreen() {
   const { baseUrl, signOut } = useSession();
 
@@ -173,6 +378,10 @@ export function KioskWorkspaceScreen() {
   const [error,         setError]        = useState<string | null>(null);
   const [loading,       setLoading]      = useState(false);
   const [clock,         setClock]        = useState(new Date());
+  const printInFlight = useRef(false);
+  const showLocalExit =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
   // Live clock
   useEffect(() => {
@@ -205,27 +414,15 @@ export function KioskWorkspaceScreen() {
     setTicketNumber(null); setTrackingNumber(null); setIsAppt(false); setError(null); setLoading(false);
   };
 
-  // printTicket renders a minimal thermal-style slip.
-  // ticketNumber   = short form shown large (e.g. "G-042")
-  // trackingNumber = full date-scoped token printed small as reference (e.g. "20260314-G-042")
-  const printTicket = (num: string, tracking?: string | null) => {
+  const exitKiosk = async () => {
+    resetAll();
+    await signOut();
+  };
+
+  const printTicket = () => {
     if (typeof window === "undefined") return;
-    const w = window.open("", "_blank", "width=360,height=480");
-    if (!w) { setError("Unable to open print window. Please allow popups."); return; }
-    const refLine = tracking && tracking !== num
-      ? `<div class="ref">Ref: ${tracking}</div>` : "";
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>Queue</title>
-      <style>
-        body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Arial,sans-serif;flex-direction:column;gap:8px}
-        .n{font-size:80px;font-weight:900;line-height:1}
-        .ref{font-size:14px;color:#555;letter-spacing:.5px}
-      </style></head>
-      <body>
-        <div class="n">${num}</div>
-        ${refLine}
-        <script>window.focus();window.print();window.close();<\/script>
-      </body></html>`);
-    w.document.close();
+    window.focus();
+    window.print();
   };
 
   const fmtError = (e: unknown) => {
@@ -235,23 +432,31 @@ export function KioskWorkspaceScreen() {
     return msg;
   };
 
-  const confirmAppointment = async () => {
+  const buildDemographicsPayload = () => {
     if (!firstName.trim() || !lastName.trim() || !dob.trim()) {
-      setError("Please fill in all required fields."); return;
+      throw new Error("Please fill in all required fields.");
     }
+
+    return {
+      givenName: firstName.trim(),
+      familyName: lastName.trim(),
+      dateOfBirth: dobDisplayToIso(dob),
+      complaint: symptoms.trim() || undefined,
+    };
+  };
+
+  const confirmAppointment = async () => {
     setLoading(true); setError(null);
     try {
+      const demographics = buildDemographicsPayload();
       const res = await kioskApi.publicConfirmAppointmentByNumber(baseUrl, {
         appointmentNumber: apptNumber.trim(),
-        givenName: firstName.trim(), familyName: lastName.trim(),
-        dateOfBirth: dob.trim(),
-        complaint: symptoms.trim() || undefined,
+        ...demographics,
       });
       const num      = res.queueTicket.ticketNumber;
       const tracking = res.queueTicket.trackingNumber || null;
       setTicketNumber(num); setTrackingNumber(tracking);
-      setIsAppt(true); setScreen("success-appt");
-      printTicket(num, tracking);
+      setIsAppt(true); setScreen("printing");
     } catch (e) {
       setError(fmtError(e));
     } finally {
@@ -260,23 +465,16 @@ export function KioskWorkspaceScreen() {
   };
 
   const confirmByName = async () => {
-    if (!firstName.trim() || !lastName.trim() || !dob.trim()) {
-      setError("Please fill in all required fields."); return;
-    }
     setLoading(true); setError(null);
     try {
+      const demographics = buildDemographicsPayload();
       // name+DOB lookup falls through to walk-in check-in which will match
       // an existing appointment on the backend if one exists
-      const res = await kioskApi.publicNoAppointmentCheckIn(baseUrl, {
-        givenName: firstName.trim(), familyName: lastName.trim(),
-        dateOfBirth: dob.trim(),
-        complaint: symptoms.trim() || undefined,
-      });
+      const res = await kioskApi.publicNoAppointmentCheckIn(baseUrl, demographics);
       const num      = res.ticketNumber;
       const tracking = res.trackingNumber || null;
       setTicketNumber(num); setTrackingNumber(tracking);
-      setIsAppt(true); setScreen("success-appt");
-      printTicket(num, tracking);
+      setIsAppt(true); setScreen("printing");
     } catch (e) {
       setError(fmtError(e));
     } finally {
@@ -285,27 +483,101 @@ export function KioskWorkspaceScreen() {
   };
 
   const walkInCheckIn = async () => {
-    if (!firstName.trim() || !lastName.trim() || !dob.trim()) {
-      setError("Please fill in all required fields."); return;
-    }
     setLoading(true); setError(null);
     try {
-      const res = await kioskApi.publicNoAppointmentCheckIn(baseUrl, {
-        givenName: firstName.trim(), familyName: lastName.trim(),
-        dateOfBirth: dob.trim(),
-        complaint: symptoms.trim() || undefined,
-      });
+      const demographics = buildDemographicsPayload();
+      const res = await kioskApi.publicNoAppointmentCheckIn(baseUrl, demographics);
       const num      = res.ticketNumber;
       const tracking = res.trackingNumber || null;
       setTicketNumber(num); setTrackingNumber(tracking);
-      setIsAppt(false); setScreen("success-walkin");
-      printTicket(num, tracking);
+      setIsAppt(false); setScreen("printing");
     } catch (e) {
       setError(fmtError(e));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `
+      @media print {
+        body * {
+          visibility: hidden !important;
+        }
+        #kiosk-print-root,
+        #kiosk-print-root * {
+          visibility: visible !important;
+        }
+        #kiosk-print-root {
+          position: fixed !important;
+          inset: 0 !important;
+          width: 100% !important;
+          min-height: 100vh !important;
+          background: #ffffff !important;
+          display: flex !important;
+          flex-direction: column !important;
+          align-items: center !important;
+          justify-content: center !important;
+          gap: 12px !important;
+          padding: 24px !important;
+          border: 0 !important;
+          box-shadow: none !important;
+          border-radius: 0 !important;
+        }
+      }
+    `;
+    document.head.appendChild(styleEl);
+    return () => {
+      styleEl.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || screen !== "printing" || !ticketNumber || printInFlight.current) {
+      return;
+    }
+
+    printInFlight.current = true;
+    let finished = false;
+    let startTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      printInFlight.current = false;
+      window.removeEventListener("afterprint", handleAfterPrint);
+      if (startTimer) clearTimeout(startTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      setTimeout(() => {
+        resetAll();
+      }, 900);
+    };
+
+    const handleAfterPrint = () => {
+      finish();
+    };
+
+    window.addEventListener("afterprint", handleAfterPrint);
+
+    startTimer = setTimeout(() => {
+      printTicket();
+      fallbackTimer = setTimeout(() => {
+        finish();
+      }, 4000);
+    }, 250);
+
+    return () => {
+      window.removeEventListener("afterprint", handleAfterPrint);
+      if (startTimer) clearTimeout(startTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (!finished) {
+        printInFlight.current = false;
+      }
+    };
+  }, [screen, ticketNumber]);
 
   const timeStr = clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const dateStr = clock.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -323,7 +595,12 @@ export function KioskWorkspaceScreen() {
             <Text style={ks.logoSub}>Kanifing General Hospital</Text>
           </View>
         </View>
-        <View>
+        <View style={ks.headerRight}>
+          {showLocalExit ? (
+            <Pressable onPress={() => { void exitKiosk(); }} style={ks.exitBtn}>
+              <Text style={ks.exitBtnText}>Exit Kiosk</Text>
+            </Pressable>
+          ) : null}
           <Text style={ks.clockTime}>{timeStr}</Text>
           <Text style={ks.clockDate}>{dateStr}</Text>
         </View>
@@ -394,7 +671,7 @@ export function KioskWorkspaceScreen() {
                 <KioskInput label="Last Name *" value={lastName} onChange={setLastName} placeholder="Keita" />
               </View>
             </View>
-            <KioskInput label="Date of Birth *" value={dob} onChange={setDob} placeholder="YYYY-MM-DD" />
+            <DateOfBirthInput label="Date of Birth *" value={dob} onChange={setDob} />
             <KioskInput label="Main Symptoms (optional)" value={symptoms} onChange={setSymptoms} placeholder="Describe your main complaint…" />
             <View style={ks.infoBox}>
               <Text style={ks.infoBoxText}>
@@ -425,7 +702,7 @@ export function KioskWorkspaceScreen() {
                 <KioskInput label="Last Name *" value={lastName} onChange={setLastName} placeholder="Keita" />
               </View>
             </View>
-            <KioskInput label="Date of Birth *" value={dob} onChange={setDob} placeholder="YYYY-MM-DD" />
+            <DateOfBirthInput label="Date of Birth *" value={dob} onChange={setDob} />
             <KioskInput label="Main Symptoms (optional)" value={symptoms} onChange={setSymptoms} placeholder="Describe your main complaint…" />
             <View style={ks.infoBox}>
               <Text style={ks.infoBoxText}>
@@ -466,7 +743,7 @@ export function KioskWorkspaceScreen() {
                 <KioskInput label="Last Name *" value={lastName} onChange={setLastName} placeholder="Keita" />
               </View>
             </View>
-            <KioskInput label="Date of Birth *" value={dob} onChange={setDob} placeholder="YYYY-MM-DD" />
+            <DateOfBirthInput label="Date of Birth *" value={dob} onChange={setDob} />
             <KioskInput label="Main Symptoms (optional)" value={symptoms} onChange={setSymptoms} placeholder="Describe your main complaint…" />
             {error ? <View style={ks.errorBox}><Text style={ks.errorText}>⚠ {error}</Text></View> : null}
             <Pressable onPress={walkInCheckIn} disabled={loading} style={[ks.submitBtn, loading && ks.submitBtnDisabled]}>
@@ -476,13 +753,12 @@ export function KioskWorkspaceScreen() {
         )}
 
         {/* ── SUCCESS ── */}
-        {(screen === "success-appt" || screen === "success-walkin") && ticketNumber && (
+        {screen === "printing" && ticketNumber && (
           <View style={ks.page}>
-            <SuccessScreen
+            <PrintingScreen
               ticketNumber={ticketNumber}
-              isAppointment={screen === "success-appt"}
-              onReset={resetAll}
-              onPrint={() => printTicket(ticketNumber)}
+              trackingNumber={trackingNumber}
+              isAppointment={isAppt}
             />
           </View>
         )}
@@ -500,11 +776,14 @@ export function KioskWorkspaceScreen() {
 const ks = StyleSheet.create({
   root:               { flex: 1, backgroundColor: BG },
   header:             { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, paddingHorizontal: 24, backgroundColor: "rgba(255,255,255,0.88)", borderBottomWidth: 1.5, borderBottomColor: BDR, position: "relative", zIndex: 2 },
+  headerRight:        { alignItems: "flex-end", gap: 8 },
   logoRow:            { flexDirection: "row", alignItems: "center", gap: 10 },
   logoRing:           { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: TEAL, backgroundColor: TEAL_L, alignItems: "center", justifyContent: "center" },
   logoRingText:       { fontSize: 16, color: TEAL },
   logoText:           { fontSize: 17, fontWeight: "900", color: TEAL, letterSpacing: 4 },
   logoSub:            { fontSize: 10, color: TXT2, fontWeight: "600" },
+  exitBtn:            { backgroundColor: SURF, borderWidth: 1.5, borderColor: BDR, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  exitBtnText:        { fontSize: 12, fontWeight: "700", color: TXT2 },
   clockTime:          { fontSize: 22, fontWeight: "800", color: TXT, textAlign: "right" },
   clockDate:          { fontSize: 10, color: TXT3, textAlign: "right" },
   body:               { padding: 24, alignItems: "center", flexGrow: 1 },
@@ -527,6 +806,13 @@ const ks = StyleSheet.create({
   field:              { marginBottom: 12 },
   fieldLabel:         { fontSize: 13, fontWeight: "700", color: TXT, marginBottom: 6 },
   fieldInput:         { width: "100%", padding: 13, borderWidth: 2.5, borderColor: BDR, borderRadius: 10, fontSize: 16, color: TXT, backgroundColor: SURF },
+  dateRow:            { flexDirection: "row", alignItems: "center", gap: 10 },
+  dateTextInput:      { flex: 1 },
+  dateReadonlyField:  { justifyContent: "center" },
+  dateReadonlyText:   { fontSize: 16, color: TXT },
+  calendarWrap:       { width: 52, height: 52, position: "relative" },
+  calendarBtn:        { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: SURF, borderWidth: 2.5, borderColor: BDR, borderRadius: 10 },
+  calendarBtnText:    { fontSize: 20 },
   infoBox:            { backgroundColor: TEAL_L, borderWidth: 1.5, borderColor: "#99d6d0", borderRadius: 9, padding: 11, marginBottom: 12 },
   infoBoxText:        { fontSize: 12, color: "#0f5950", lineHeight: 18 },
   emergBox:           { flexDirection: "row", gap: 12, backgroundColor: RED_BG, borderWidth: 2, borderColor: "#fca5a5", borderRadius: 12, padding: 14, marginBottom: 18, alignItems: "flex-start" },
@@ -542,6 +828,15 @@ const ks = StyleSheet.create({
   successLabel:       { fontSize: 16, color: TXT2, fontWeight: "600", marginBottom: 4 },
   successNumber:      { fontSize: 90, fontWeight: "900", color: TEAL, lineHeight: 100, marginBottom: 10 },
   successRef:         { fontSize: 13, color: TXT2, marginBottom: 14, letterSpacing: 0.4 },
+  printingWrap:       { alignItems: "center", paddingVertical: 24, gap: 12 },
+  printingTitle:      { fontSize: 28, fontWeight: "900", color: TXT, textAlign: "center" },
+  printingHint:       { fontSize: 14, color: TXT2, textAlign: "center", maxWidth: 420, lineHeight: 22 },
+  printTicketCard:    { width: "100%", maxWidth: 360, backgroundColor: SURF, borderWidth: 2, borderColor: TEAL_L, borderRadius: 18, paddingVertical: 28, paddingHorizontal: 24, alignItems: "center", gap: 10 },
+  printTicketFacility:{ fontSize: 18, fontWeight: "900", color: TEAL, letterSpacing: 4 },
+  printTicketLabel:   { fontSize: 15, fontWeight: "700", color: TXT2 },
+  printTicketNumber:  { fontSize: 88, fontWeight: "900", color: TEAL, lineHeight: 96 },
+  printTicketRef:     { fontSize: 14, color: TXT2, letterSpacing: 0.4 },
+  printTicketPriority:{ fontSize: 14, color: TXT, fontWeight: "700" },
   apptNote:           { backgroundColor: TEAL_L, borderWidth: 1.5, borderColor: "#99d6d0", borderRadius: 10, padding: 12, marginBottom: 16, maxWidth: 440 },
   apptNoteText:       { fontSize: 13, color: "#0f5950", fontWeight: "600", textAlign: "center" },
   successHint:        { fontSize: 15, color: TXT3, textAlign: "center", lineHeight: 22, marginBottom: 24 },

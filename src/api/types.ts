@@ -24,12 +24,88 @@ export interface HealthResponse {
   [key: string]: unknown;
 }
 
+export type PregnancyStatus =
+  | "UNKNOWN"
+  | "NOT_APPLICABLE"
+  | "NOT_PREGNANT"
+  | "PREGNANT"
+  | "POSTPARTUM";
+
+export type VulnerabilityIndicator =
+  | "ELDERLY"
+  | "NEWBORN"
+  | "EXPECTANT"
+  | "POSTPARTUM_RECOVERY"
+  | "POSTPARTUM_DEPRESSION_RISK"
+  | "DISABILITY_SUPPORT"
+  | "FALL_RISK"
+  | "MENTAL_HEALTH_RISK"
+  | "DOMESTIC_VIOLENCE_RISK"
+  | "CHRONIC_COMPLEXITY";
+
+export interface DashboardComplaint {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface DashboardBreakdownItem {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface DashboardDurationMetric {
+  label: string;
+  averageMinutes?: number | null;
+  minMinutes?: number | null;
+  maxMinutes?: number | null;
+  sampleSize?: number | null;
+}
+
+export interface DashboardAgeBucket {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface ClinicalDashboard {
+  dashboardType: string;
+  viewerRole: string;
+  subjectLabel: string;
+  activityLabel: string;
+  patientsSeenToday: number;
+  patientsSeenWeek: number;
+  patientsSeenMonth: number;
+  mostCommonComplaintWeek?: DashboardComplaint | null;
+  mostCommonComplaintMonth?: DashboardComplaint | null;
+  recurringIssueFlagged: boolean;
+  recurringIssueMessage?: string | null;
+  todayCategoryBreakdown: DashboardBreakdownItem[];
+  todayUrgencyBreakdown: DashboardBreakdownItem[];
+  processingTimeToday?: DashboardDurationMetric | null;
+  ageDistributionMonth: DashboardAgeBucket[];
+  aiTranscriptionCorrectnessWeekPercent?: number | null;
+  aiTranscriptionCorrectnessMonthPercent?: number | null;
+  weekStartDate?: string | null;
+  monthStartDate?: string | null;
+  generatedAt?: string | null;
+}
+
 export interface QueueTicket {
   id: string;
   patientId: string;
   patientMrn?: string;
   patientNumber?: string;
   patientName?: string;
+  patientDateOfBirth?: string | null;
+  patientAgeYears?: number | null;
+  patientAgeInDays?: number | null;
+  pregnancyStatus?: PregnancyStatus | null;
+  isPregnant?: boolean | null;
+  newborn?: boolean | null;
+  elderly?: boolean | null;
+  vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
   queueDate: string;
   ticketNumber: string;
   trackingNumber?: string;
@@ -109,6 +185,12 @@ export interface PatientResponse {
   address?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
+  ageYears?: number | null;
+  ageInDays?: number | null;
+  pregnancyStatus?: PregnancyStatus | null;
+  isPregnant?: boolean | null;
+  vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+  vulnerabilityNotes?: string | null;
   consentGiven: boolean;
   consentAt?: string;
   active: boolean;
@@ -121,6 +203,39 @@ export interface TriageAssessment {
   patientId: string;
   queueTicketId: string;
   chiefComplaint: string;
+  patientAgeYears?: number | null;
+  patientAgeInDays?: number | null;
+  temperatureCelsius?: number | string | null;
+  heartRateBpm?: number | null;
+  bloodPressureSystolic?: number | null;
+  bloodPressureDiastolic?: number | null;
+  respiratoryRate?: number | null;
+  oxygenSaturation?: number | null;
+  weightKg?: number | string | null;
+  heightCm?: number | string | null;
+  painScore?: number | null;
+  bloodGlucoseMmol?: number | string | null;
+  consciousnessLevel?: string | null;
+  hasRedFlags?: boolean;
+  chestPain?: boolean;
+  difficultyBreathing?: boolean;
+  strokeSymptoms?: boolean;
+  severebleeding?: boolean;
+  allergicReaction?: boolean;
+  alteredMentalStatus?: boolean;
+  pregnancyConcern?: boolean;
+  severeAbdominalPain?: boolean;
+  pregnancyStatus?: PregnancyStatus | null;
+  pregnant?: boolean | null;
+  newborn?: boolean | null;
+  elderly?: boolean | null;
+  vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+  vulnerabilityNotes?: string | null;
+  historyOfPresentIllness?: string | null;
+  allergies?: string | null;
+  currentMedications?: string | null;
+  pastMedicalHistory?: string | null;
+  nursingNotes?: string | null;
   systemTriageLevel?: string;
   finalTriageLevel?: string;
   triageOverridden?: boolean;
@@ -142,10 +257,65 @@ export interface EncounterSummary {
   addendumCount: number;
 }
 
+export interface EncounterPreviewPatientSummary {
+  patientId?: string;
+  mrn?: string;
+  fullName?: string;
+  givenName?: string;
+  familyName?: string;
+  dateOfBirth?: string;
+  ageYears?: number | null;
+  sex?: string;
+  phoneNumber?: string;
+  email?: string;
+}
+
+export interface EncounterPreviewQueueSummary {
+  id?: string;
+  ticketNumber?: string;
+  workflowNumber?: string;
+  patientId?: string;
+  patientName?: string;
+  triageLevel?: string;
+  appointmentId?: string;
+  appointmentScheduledAt?: string;
+  assignedClinicianName?: string;
+  category?: string;
+  status?: string;
+  patientDateOfBirth?: string | null;
+  patientAgeYears?: number | null;
+  patientAgeInDays?: number | null;
+  pregnancyStatus?: PregnancyStatus | null;
+  isPregnant?: boolean | null;
+  vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+}
+
+export interface EncounterPreviewTriageSummary {
+  chiefComplaint?: string;
+  temperatureCelsius?: number | null;
+  heartRateBpm?: number | null;
+  bloodPressureSystolic?: number | null;
+  bloodPressureDiastolic?: number | null;
+  respiratoryRate?: number | null;
+  oxygenSaturation?: number | null;
+  allergies?: string | null;
+  currentMedications?: string | null;
+  pastMedicalHistory?: string | null;
+  historyOfPresentIllness?: string | null;
+  nursingNotes?: string | null;
+  finalTriageLevel?: string | null;
+  pregnancyStatus?: PregnancyStatus | null;
+  pregnant?: boolean | null;
+  newborn?: boolean | null;
+  elderly?: boolean | null;
+  vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+  vulnerabilityNotes?: string | null;
+}
+
 export interface EncounterPreview {
-  patient?: Record<string, unknown>;
-  queue?: Record<string, unknown>;
-  triage?: Record<string, unknown>;
+  patient?: EncounterPreviewPatientSummary;
+  queue?: EncounterPreviewQueueSummary;
+  triage?: EncounterPreviewTriageSummary;
   activeMedications?: unknown[];
   alerts?: unknown[];
   recentEncounters?: unknown[];
@@ -578,6 +748,16 @@ export interface FacilityWorkflowConfig {
 }
 
 export interface AdminStaffAccount {
+  userId: string;
+  username: string;
+  email?: string | null;
+  fullName: string;
+  role: string;
+  actorType: string;
+  active: boolean;
+}
+
+export interface AdminUserAccount {
   userId: string;
   username: string;
   email?: string | null;

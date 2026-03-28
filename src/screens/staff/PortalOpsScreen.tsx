@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { clinicalPortalApi } from "../../api/services";
+import { clinicalPortalApi, patientApi } from "../../api/services";
+import type { PatientResponse } from "../../api/types";
 import { ActionButton, Card, InlineActions, InputField, JsonPanel, MessageBanner, ToggleField } from "../../components/ui";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
@@ -15,8 +16,9 @@ export function PortalOpsScreen({
   prefillPatientName,
   onPrefillConsumed
 }: PortalOpsScreenProps) {
-  const { apiContext } = useSession();
+  const { apiContext, role } = useSession();
   const [patientId, setPatientId] = useState("");
+  const [resolvedPatient, setResolvedPatient] = useState<PatientResponse | null>(null);
   const [justification, setJustification] = useState("");
   const [nokApproverName, setNokApproverName] = useState("");
   const [nokName, setNokName] = useState("");
@@ -57,15 +59,23 @@ export function PortalOpsScreen({
     if (prefillPatientName && !messageSubject.trim()) {
       setMessageSubject(`Message for ${prefillPatientName}`);
     }
-    setMessage(`Loaded patient messaging target: ${prefillPatientName || prefillPatientId}`);
+    setMessage(`Patient ready: ${prefillPatientName || prefillPatientId}`);
     setTone("success");
     onPrefillConsumed?.();
   }, [messageSubject, onPrefillConsumed, prefillPatientId, prefillPatientName]);
 
   if (!apiContext) {
     return (
-      <Card title="Portal Ops">
+      <Card title="Patient Services">
         <MessageBanner message="No authenticated session." tone="error" />
+      </Card>
+    );
+  }
+
+  if (role === "NURSE") {
+    return (
+      <Card title="Patient Services">
+        <MessageBanner message="This workspace is not part of the nurse workflow." tone="info" />
       </Card>
     );
   }
@@ -80,11 +90,35 @@ export function PortalOpsScreen({
     setTone("success");
   };
 
+  const resolvePatientRecord = async (rawValue = patientId) => {
+    const value = rawValue.trim();
+    if (!value) {
+      throw new Error("Patient ID is required");
+    }
+
+    try {
+      const patient = await patientApi.getByMrn(apiContext, value);
+      setResolvedPatient(patient);
+      setPatientId(patient.mrn || value);
+      return patient;
+    } catch {
+      try {
+        const patient = await patientApi.getById(apiContext, value);
+        setResolvedPatient(patient);
+        setPatientId(patient.mrn || value);
+        return patient;
+      } catch {
+        throw new Error("Patient not found. Use the patient ID from registration or lookup.");
+      }
+    }
+  };
+
   const loadScope = async () => {
     try {
-      const data = await clinicalPortalApi.getScope(apiContext, patientId.trim());
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.getScope(apiContext, patient.id);
       setScope(data);
-      showSuccess("Access scope loaded");
+      showSuccess("Access checked");
     } catch (error) {
       showError(error);
     }
@@ -92,9 +126,10 @@ export function PortalOpsScreen({
 
   const loadOverview = async () => {
     try {
-      const data = await clinicalPortalApi.getOverview(apiContext, patientId.trim());
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.getOverview(apiContext, patient.id);
       setOverview(data);
-      showSuccess("Patient overview loaded");
+      showSuccess("Patient summary ready");
     } catch (error) {
       showError(error);
     }
@@ -102,9 +137,10 @@ export function PortalOpsScreen({
 
   const loadEmergencyData = async () => {
     try {
-      const data = await clinicalPortalApi.getEmergencyData(apiContext, patientId.trim());
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.getEmergencyData(apiContext, patient.id);
       setEmergencyData(data);
-      showSuccess("Emergency data loaded");
+      showSuccess("Emergency details ready");
     } catch (error) {
       showError(error);
     }
@@ -112,7 +148,8 @@ export function PortalOpsScreen({
 
   const breakGlass = async () => {
     try {
-      const data = await clinicalPortalApi.breakGlass(apiContext, patientId.trim(), justification);
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.breakGlass(apiContext, patient.id, justification);
       setLastResponse(data);
       showSuccess("Emergency break-glass recorded");
     } catch (error) {
@@ -122,7 +159,8 @@ export function PortalOpsScreen({
 
   const recordNokApproval = async () => {
     try {
-      const data = await clinicalPortalApi.nextOfKinApproval(apiContext, patientId.trim(), {
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.nextOfKinApproval(apiContext, patient.id, {
         approverName: nokApproverName || undefined,
         nextOfKinName: nokName,
         nextOfKinPhone: nokPhone || undefined,
@@ -144,7 +182,7 @@ export function PortalOpsScreen({
       ]);
       setPendingRenewals(renewals);
       setPendingTransfers(transfers);
-      showSuccess("Pending renewals and transfers loaded");
+      showSuccess("Pending requests ready");
     } catch (error) {
       showError(error);
     }
@@ -192,9 +230,10 @@ export function PortalOpsScreen({
 
   const loadInbox = async () => {
     try {
-      const data = await clinicalPortalApi.getInbox(apiContext, patientId.trim() || undefined);
+      const patient = patientId.trim() ? await resolvePatientRecord() : null;
+      const data = await clinicalPortalApi.getInbox(apiContext, patient?.id);
       setInbox(data);
-      showSuccess("Clinician inbox loaded");
+      showSuccess("Messages ready");
     } catch (error) {
       showError(error);
     }
@@ -204,7 +243,7 @@ export function PortalOpsScreen({
     try {
       const id = messageIdToMarkRead.trim();
       if (!id) {
-        throw new Error("Message UUID is required");
+        throw new Error("Message ID is required");
       }
       const data = await clinicalPortalApi.markMessageRead(apiContext, id);
       setLastResponse(data);
@@ -217,9 +256,10 @@ export function PortalOpsScreen({
 
   const loadPatientLabs = async () => {
     try {
-      const data = await clinicalPortalApi.getPatientLabs(apiContext, patientId.trim());
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.getPatientLabs(apiContext, patient.id);
       setPatientLabs(data);
-      showSuccess("Patient labs loaded");
+      showSuccess("Lab results ready");
     } catch (error) {
       showError(error);
     }
@@ -227,9 +267,10 @@ export function PortalOpsScreen({
 
   const loadPatientReferrals = async () => {
     try {
-      const data = await clinicalPortalApi.getPatientReferrals(apiContext, patientId.trim());
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.getPatientReferrals(apiContext, patient.id);
       setPatientReferrals(data);
-      showSuccess("Patient referrals loaded");
+      showSuccess("Referrals ready");
     } catch (error) {
       showError(error);
     }
@@ -237,7 +278,8 @@ export function PortalOpsScreen({
 
   const sendMessageToPatient = async () => {
     try {
-      const data = await clinicalPortalApi.sendToPatient(apiContext, patientId.trim(), {
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.sendToPatient(apiContext, patient.id, {
         category: "GENERAL",
         subject: messageSubject || undefined,
         body: messageBody
@@ -251,7 +293,8 @@ export function PortalOpsScreen({
 
   const addLab = async () => {
     try {
-      const data = await clinicalPortalApi.addLab(apiContext, patientId.trim(), {
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.addLab(apiContext, patient.id, {
         testName: labTestName,
         resultValue: labResult,
         criticalResult: false
@@ -265,7 +308,8 @@ export function PortalOpsScreen({
 
   const addReferral = async () => {
     try {
-      const data = await clinicalPortalApi.addReferral(apiContext, patientId.trim(), {
+      const patient = await resolvePatientRecord();
+      const data = await clinicalPortalApi.addReferral(apiContext, patient.id, {
         referredToFacility: referralFacility,
         specialty: referralSpecialty,
         reason: referralReason,
@@ -282,7 +326,7 @@ export function PortalOpsScreen({
     try {
       const data = await clinicalPortalApi.getPrintableReferral(apiContext, referralIdForPrint.trim());
       setPrintableReferral(data);
-      showSuccess("Printable referral loaded");
+      showSuccess("Referral preview ready");
     } catch (error) {
       showError(error);
     }
@@ -302,7 +346,7 @@ export function PortalOpsScreen({
     try {
       const id = referralIdForPrint.trim();
       if (!id) {
-        throw new Error("Referral UUID is required");
+        throw new Error("Referral ID is required");
       }
       const data = await clinicalPortalApi.updateReferralStatus(apiContext, id, referralStatus, referralStatusNotes || undefined);
       setLastResponse(data);
@@ -314,12 +358,25 @@ export function PortalOpsScreen({
 
   return (
     <>
-      <Card title="Patient Data Access Controls">
-        <InputField label="Patient UUID" value={patientId} onChangeText={setPatientId} />
+      <Card title="Patient Access">
+        <InputField
+          label="Patient ID"
+          value={patientId}
+          onChangeText={(value) => {
+            setPatientId(value);
+            setResolvedPatient(null);
+          }}
+        />
+        {resolvedPatient ? (
+          <MessageBanner
+            message={`Selected patient: ${resolvedPatient.fullName} · ${resolvedPatient.mrn}`}
+            tone="info"
+          />
+        ) : null}
         <InlineActions>
-          <ActionButton label="Load Scope" onPress={loadScope} />
-          <ActionButton label="Load Overview" onPress={loadOverview} variant="secondary" />
-          <ActionButton label="Load Emergency Data" onPress={loadEmergencyData} variant="secondary" />
+          <ActionButton label="Check Access" onPress={loadScope} />
+          <ActionButton label="View Summary" onPress={loadOverview} variant="secondary" />
+          <ActionButton label="View Emergency Details" onPress={loadEmergencyData} variant="secondary" />
         </InlineActions>
         <InputField label="Emergency Justification" value={justification} onChangeText={setJustification} multiline />
         <InlineActions>
@@ -335,11 +392,11 @@ export function PortalOpsScreen({
         <MessageBanner message={message} tone={tone} />
       </Card>
 
-      <Card title="Pending Reviews">
+      <Card title="Requests">
         <InlineActions>
-          <ActionButton label="Load Pending Renewals/Transfers" onPress={loadPendingQueues} />
+          <ActionButton label="Review Pending Requests" onPress={loadPendingQueues} />
         </InlineActions>
-        <InputField label="Request UUID (Renewal or Transfer)" value={reviewRequestId} onChangeText={setReviewRequestId} />
+        <InputField label="Request ID" value={reviewRequestId} onChangeText={setReviewRequestId} />
         <InputField label="Review Comments" value={reviewComments} onChangeText={setReviewComments} multiline />
         <InlineActions>
           <ActionButton label="Approve Renewal" onPress={approveRenewal} />
@@ -351,14 +408,14 @@ export function PortalOpsScreen({
         </InlineActions>
       </Card>
 
-      <Card title="Messaging & Clinical Records">
+      <Card title="Communication & Records">
         <InlineActions>
-          <ActionButton label="Load Inbox" onPress={loadInbox} />
-          <ActionButton label="Load Patient Labs" onPress={loadPatientLabs} variant="secondary" />
-          <ActionButton label="Load Patient Referrals" onPress={loadPatientReferrals} variant="secondary" />
+          <ActionButton label="View Messages" onPress={loadInbox} />
+          <ActionButton label="View Lab Results" onPress={loadPatientLabs} variant="secondary" />
+          <ActionButton label="View Referrals" onPress={loadPatientReferrals} variant="secondary" />
         </InlineActions>
         <InputField
-          label="Inbox Message UUID to Mark Read"
+          label="Message ID"
           value={messageIdToMarkRead}
           onChangeText={setMessageIdToMarkRead}
         />
@@ -385,7 +442,7 @@ export function PortalOpsScreen({
           <ActionButton label="Add Referral" onPress={addReferral} />
         </InlineActions>
         <InputField
-          label="Referral UUID for Printable/Print"
+          label="Referral ID"
           value={referralIdForPrint}
           onChangeText={setReferralIdForPrint}
         />
@@ -402,7 +459,7 @@ export function PortalOpsScreen({
           multiline
         />
         <InlineActions>
-          <ActionButton label="Load Printable Referral" onPress={loadPrintableReferral} variant="secondary" />
+          <ActionButton label="Preview Referral" onPress={loadPrintableReferral} variant="secondary" />
           <ActionButton label="Mark Referral Printed" onPress={markReferralPrinted} />
           <ActionButton label="Update Referral Status" onPress={updateReferralStatus} variant="secondary" />
         </InlineActions>

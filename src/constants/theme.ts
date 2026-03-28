@@ -61,6 +61,15 @@ export const triagePalette = {
   BLUE:   { bgDark:"#1e3a5f", bgLight:"#eff6ff", border:"#3b82f6", borderLight:"#93c5fd", textDark:"#93c5fd", textLight:"#1e40af", dot:"#3b82f6", label:"EXPECTANT"    },
 } as const;
 
+export const vulnerabilityPalette = {
+  base: "#8B2C5E",
+  soft: "#F7E8EF",
+  border: "#D9A5BC",
+  elderly: "#74214F",
+  expectant: "#9C3E70",
+  newborn: "#B85A88",
+} as const;
+
 // ─── TYPOGRAPHY ───────────────────────────────────────────────────────────────
 export const typography = {
   headingFamily:

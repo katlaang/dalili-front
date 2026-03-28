@@ -37,6 +37,27 @@ export const sexOptions = ["MALE", "FEMALE", "OTHER", "UNKNOWN"] as const;
 
 export const consciousnessOptions = ["ALERT", "VOICE", "PAIN", "UNRESPONSIVE"] as const;
 
+export const pregnancyStatusOptions = [
+  "UNKNOWN",
+  "NOT_APPLICABLE",
+  "NOT_PREGNANT",
+  "PREGNANT",
+  "POSTPARTUM",
+] as const;
+
+export const vulnerabilityIndicatorOptions = [
+  "ELDERLY",
+  "NEWBORN",
+  "EXPECTANT",
+  "POSTPARTUM_RECOVERY",
+  "POSTPARTUM_DEPRESSION_RISK",
+  "DISABILITY_SUPPORT",
+  "FALL_RISK",
+  "MENTAL_HEALTH_RISK",
+  "DOMESTIC_VIOLENCE_RISK",
+  "CHRONIC_COMPLEXITY",
+] as const;
+
 export const encounterTypeOptions = [
   "NEW_VISIT",
   "FOLLOW_UP",

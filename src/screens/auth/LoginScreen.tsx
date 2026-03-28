@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ApiError } from "../../api/client";
 import { authApi } from "../../api/services";
+import type { LoginResponse } from "../../api/types";
+import { DEFAULT_KIOSK_DEVICE_ID, DEFAULT_KIOSK_DEVICE_SECRET } from "../../config/env";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 
@@ -92,6 +95,50 @@ function SatinBackground({ scheme }: { scheme: ColorScheme }) {
   );
 }
 
+function getUsernameVariants(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  return Array.from(new Set([trimmed, trimmed.toUpperCase(), trimmed.toLowerCase()]));
+}
+
+function canRetryWithDifferentUsernameCase(error: unknown) {
+  if (error instanceof ApiError) {
+    return error.status === 400 || error.status === 401 || error.status === 404;
+  }
+
+  const message = toErrorMessage(error).toLowerCase();
+  return message.includes("invalid") || message.includes("credential") || message.includes("not found");
+}
+
+async function loginIgnoringUsernameCase(
+  username: string,
+  login: (candidate: string) => Promise<LoginResponse>
+) {
+  const candidates = getUsernameVariants(username);
+  if (candidates.length === 0) {
+    throw new Error("Username is required.");
+  }
+
+  let lastError: unknown = new Error("Username is required.");
+
+  for (const candidate of candidates) {
+    try {
+      const response = await login(candidate);
+      return { response, username: candidate };
+    } catch (error) {
+      lastError = error;
+      if (!canRetryWithDifferentUsernameCase(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 export function LoginScreen() {
   const { baseUrl, signIn } = useSession();
 
@@ -114,6 +161,9 @@ export function LoginScreen() {
   const [bootstrapAllowed, setBootstrapAllowed] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const showLocalKioskEntry =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
   const T = scheme === "dark" ? DARK : LIGHT;
 
@@ -134,21 +184,30 @@ export function LoginScreen() {
       setLoading(true); setMessage(null);
       let token: string | null = null;
       let resolvedRole: string | null = null;
+      let resolvedUsername = "";
 
       if (mode === "STAFF") {
-        const r = await authApi.loginStaff(baseUrl, username.trim(), password);
+        const { response: r, username: matchedUsername } = await loginIgnoringUsernameCase(
+          username,
+          candidate => authApi.loginStaff(baseUrl, candidate, password)
+        );
         if (["ADMIN", "SUPER_ADMIN"].includes((r.role || "").toUpperCase()))
           throw new Error("Use the Admin panel for admin accounts.");
         token = r.token;
         resolvedRole = r.role || null;
+        resolvedUsername = matchedUsername;
       } else {
-        const r = await authApi.loginPatient(baseUrl, username.trim(), password);
+        const { response: r, username: matchedUsername } = await loginIgnoringUsernameCase(
+          username,
+          candidate => authApi.loginPatient(baseUrl, candidate, password)
+        );
         token = r.token;
         resolvedRole = r.role || "PATIENT";
+        resolvedUsername = matchedUsername;
       }
 
       if (!token) throw new Error("No token returned by server");
-      await signIn({ token, actor: mode, username: username.trim(), role: resolvedRole });
+      await signIn({ token, actor: mode, username: resolvedUsername, role: resolvedRole });
     } catch (e) {
       setMessage(toErrorMessage(e));
     } finally {
@@ -159,11 +218,14 @@ export function LoginScreen() {
   const handleAdminLogin = async () => {
     try {
       setLoading(true); setMessage(null);
-      const r = await authApi.loginStaff(baseUrl, adminUsername.trim(), adminPassword);
+      const { response: r, username: matchedUsername } = await loginIgnoringUsernameCase(
+        adminUsername,
+        candidate => authApi.loginStaff(baseUrl, candidate, adminPassword)
+      );
       if (!["ADMIN", "SUPER_ADMIN"].includes((r.role || "").toUpperCase()))
         throw new Error("Admin accounts only.");
       if (!r.token) throw new Error("No token returned by server");
-      await signIn({ token: r.token, actor: "STAFF", username: adminUsername.trim(), role: r.role || null });
+      await signIn({ token: r.token, actor: "STAFF", username: matchedUsername, role: r.role || null });
     } catch (e) {
       setMessage(toErrorMessage(e));
     } finally {
@@ -186,6 +248,31 @@ export function LoginScreen() {
       setMessage(`Admin account created. Username: ${r.username}`);
     } catch (e) {
       setMessage(toErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const enterKiosk = async () => {
+    try {
+      setLoading(true);
+      setMessage(null);
+      const response = await authApi.loginKioskDevice(
+        baseUrl,
+        DEFAULT_KIOSK_DEVICE_ID,
+        DEFAULT_KIOSK_DEVICE_SECRET
+      );
+      if (!response.token) throw new Error("No token returned by server");
+      await signIn({
+        token: response.token,
+        actor: "KIOSK",
+        username: DEFAULT_KIOSK_DEVICE_ID,
+        role: response.role || "KIOSK"
+      });
+    } catch (error) {
+      const fallback =
+        "Kiosk sign-in failed. Register the default kiosk device first or update the kiosk credentials in env.ts.";
+      setMessage(error instanceof ApiError ? `${toErrorMessage(error)}. ${fallback}` : toErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -305,6 +392,23 @@ export function LoginScreen() {
                   : <Text style={[ls.btnText, { color: scheme === "dark" ? "#0b1623" : "#fff" }]}>Sign In →</Text>
                 }
               </Pressable>
+              {showLocalKioskEntry ? (
+                <>
+                  <Text style={[ls.devHint, { color: T.textMuted }]}>
+                    Localhost only: enter kiosk mode with the configured kiosk device.
+                  </Text>
+                  <Pressable
+                    onPress={enterKiosk}
+                    disabled={loading}
+                    style={[
+                      ls.secondaryBtn,
+                      { borderColor: T.border, backgroundColor: loading ? T.border : "transparent" }
+                    ]}
+                  >
+                    <Text style={[ls.secondaryBtnText, { color: T.text }]}>Enter Kiosk</Text>
+                  </Pressable>
+                </>
+              ) : null}
             </>
           )}
 
@@ -398,5 +502,8 @@ const ls = StyleSheet.create({
   msg:        { fontSize: 13, marginBottom: 10, textAlign: "center" },
   btn:        { borderRadius: 10, paddingVertical: 13, alignItems: "center", justifyContent: "center", marginTop: 2 },
   btnText:    { fontSize: 14, fontWeight: "700", letterSpacing: 0.3 },
+  devHint:    { fontSize: 11, textAlign: "center", marginTop: 12, marginBottom: 8 },
+  secondaryBtn: { borderRadius: 10, borderWidth: 1.5, paddingVertical: 12, alignItems: "center", justifyContent: "center" },
+  secondaryBtnText: { fontSize: 13, fontWeight: "700", letterSpacing: 0.2 },
   footer:     { marginTop: 18, fontSize: 11 },
 });

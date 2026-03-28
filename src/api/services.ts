@@ -4,11 +4,13 @@ import type {
   AdminActiveSession,
   AdminAuditEvent,
   AdminStaffAccount,
+  AdminUserAccount,
   AppointmentCheckInResponse,
   AppointmentView,
   AiDraftGenerationResult,
   AmbientTranscriptionResult,
   ApiContext,
+  ClinicalDashboard,
   CarePlanAgreementResult,
   CarePlanSuggestionResult,
   ContraindicationResponse,
@@ -103,6 +105,15 @@ export const authApi = {
       method: "POST"
     }),
 
+  changePassword: (
+    ctx: ApiContext,
+    payload: { currentPassword: string; newPassword: string }
+  ) =>
+    authedRequest<{ message: string }>(ctx, "/api/auth/change-password", {
+      method: "POST",
+      body: payload
+    }),
+
   getCurrentProfile: (ctx: ApiContext) =>
     authedRequest<CurrentUserProfile>(ctx, "/api/auth/me"),
 
@@ -177,6 +188,9 @@ export const authApi = {
 };
 
 export const adminPortalApi = {
+  getUsers: (ctx: ApiContext) =>
+    authedRequest<AdminUserAccount[]>(ctx, "/api/admin/users"),
+
   getStaffAccounts: (ctx: ApiContext) =>
     authedRequest<AdminStaffAccount[]>(ctx, "/api/admin/super/staff-accounts"),
 
@@ -433,6 +447,9 @@ export const queueApi = {
       body: payload
     }),
 
+  getTicket: (ctx: ApiContext, ticketId: string) =>
+    authedRequest<QueueTicket>(ctx, `/api/queue/${ticketId}`),
+
   getQueue: (ctx: ApiContext, queueKind: "triage" | "consultation" | "waiting" | "today" | "overdue") =>
     authedRequest<QueueTicket[]>(ctx, `/api/queue/${queueKind}`),
 
@@ -578,6 +595,9 @@ export const triageApi = {
 };
 
 export const encounterApi = {
+  getClinicalDashboard: (ctx: ApiContext) =>
+    authedRequest<ClinicalDashboard>(ctx, "/api/encounters/dashboard/clinical"),
+
   getPreview: (ctx: ApiContext, queueTicketId: string) =>
     authedRequest<EncounterPreview>(ctx, `/api/encounters/preview/queue/${queueTicketId}`),
 

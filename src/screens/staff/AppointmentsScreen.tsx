@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { appointmentApi } from "../../api/services";
-import type { AppointmentCheckInResponse, AppointmentView } from "../../api/types";
+import { appointmentApi, patientApi } from "../../api/services";
+import type { AppointmentCheckInResponse, AppointmentView, PatientResponse } from "../../api/types";
 import {
   ActionButton, Card, InlineActions,
-  InputField, JsonPanel, MessageBanner,
+  InputField, MessageBanner,
   ToggleField, useTheme,
 } from "../../components/ui";
 import { useSession } from "../../state/session";
@@ -51,10 +51,9 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
   const { theme: T }         = useTheme();
 
   // ── Schedule fields ────────────────────────────────────────────────────────
-  const [patientId,          setPatientId]          = useState("");
+  const [patientMrn,         setPatientMrn]         = useState("");
   const [scheduledAt,        setScheduledAt]        = useState("");
   const [durationMinutes,    setDurationMinutes]    = useState("20");
-  const [clinicianId,        setClinicianId]        = useState("");
   const [clinicianName,      setClinicianName]      = useState("");
   const [clinicianEmployeeId,setClinicianEmployeeId]= useState("");
   const [departmentCode,     setDepartmentCode]     = useState("");
@@ -62,7 +61,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
   const [reason,             setReason]             = useState("");
 
   // ── Check-in / lookup fields ───────────────────────────────────────────────
-  const [lookupPatientId,     setLookupPatientId]     = useState("");
+  const [lookupPatientMrn,    setLookupPatientMrn]    = useState("");
   const [checkInAppointmentId,setCheckInAppointmentId]= useState("");
   const [checkInPatientId,    setCheckInPatientId]    = useState("");
   const [checkInComplaint,    setCheckInComplaint]    = useState("");
@@ -70,14 +69,15 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
 
   // ── Cancel fields ──────────────────────────────────────────────────────────
   const [cancelAppointmentId, setCancelAppointmentId] = useState("");
+  const [cancelAppointmentNumber, setCancelAppointmentNumber] = useState("");
   const [cancelReason,        setCancelReason]        = useState("");
 
   // ── Data ───────────────────────────────────────────────────────────────────
   const [todayAppointments,    setTodayAppointments]    = useState<AppointmentView[]>([]);
   const [assignedAppointments, setAssignedAppointments] = useState<AppointmentView[]>([]);
   const [pendingByPatient,     setPendingByPatient]     = useState<AppointmentView[]>([]);
+  const [selectedPatient,      setSelectedPatient]      = useState<PatientResponse | null>(null);
   const [latestCheckIn,        setLatestCheckIn]        = useState<AppointmentCheckInResponse | null>(null);
-  const [lastResponse,         setLastResponse]         = useState<unknown>(null);
 
   const [message, setMessage] = useState<string | null>(null);
   const [tone,    setTone]    = useState<"success" | "error">("success");
@@ -93,28 +93,63 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
   const err = (e: unknown) => { setMessage(toErrorMessage(e)); setTone("error"); };
   const ok  = (s: string)  => { setMessage(s); setTone("success"); };
 
-  const selectForCheckIn = (appt: AppointmentView) => {
+  const loadPatientByMrn = async (mrn: string) => {
+    const trimmed = mrn.trim();
+    if (!trimmed) {
+      throw new Error("Patient ID is required");
+    }
+    const patient = await patientApi.getByMrn(apiContext, trimmed);
+    setSelectedPatient(patient);
+    return patient;
+  };
+
+  const findAppointmentByNumber = (appointmentNumber: string) => {
+    const target = appointmentNumber.trim().toUpperCase();
+    if (!target) {
+      throw new Error("Appointment number is required");
+    }
+
+    const match = [...assignedAppointments, ...todayAppointments, ...pendingByPatient]
+      .find((appointment) => (appointment.appointmentNumber || "").trim().toUpperCase() === target);
+
+    if (!match) {
+      throw new Error("Open the appointment list first, then select or enter a valid appointment number.");
+    }
+
+    return match;
+  };
+
+  const selectForCheckIn = async (appt: AppointmentView) => {
     setCheckInAppointmentId(appt.id);
-    if (appt.patientId) setCheckInPatientId(appt.patientId);
+    if (appt.patientId) {
+      setCheckInPatientId(appt.patientId);
+      try {
+        setSelectedPatient(await patientApi.getById(apiContext, appt.patientId));
+      } catch {
+        // Keep check-in usable even if the patient summary lookup fails.
+      }
+    }
+    setCancelAppointmentId(appt.id);
+    setCancelAppointmentNumber(appt.appointmentNumber || "");
   };
 
   // ── API actions ────────────────────────────────────────────────────────────
   const scheduleAppointment = async () => {
     try {
+      const patient = await loadPatientByMrn(patientMrn);
       const created = await appointmentApi.schedule(apiContext, {
-        patientId: patientId.trim(),
+        patientId: patient.id,
         scheduledAt: scheduledAt.trim(),
         durationMinutes: toNullableNumber(durationMinutes),
-        clinicianId: clinicianId.trim() || undefined,
         clinicianName: clinicianName || undefined,
         clinicianEmployeeId: clinicianEmployeeId || undefined,
         departmentCode: departmentCode || undefined,
         departmentName: departmentName || undefined,
         reason: reason.trim() || undefined,
       });
-      setLastResponse(created);
       setCancelAppointmentId(created.id);
-      ok("Appointment scheduled");
+      setCancelAppointmentNumber(created.appointmentNumber || "");
+      ok(`Appointment scheduled for ${patient.fullName}`);
     } catch (e) { err(e); }
   };
 
@@ -122,7 +157,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
     try {
       const list = await appointmentApi.getToday(apiContext);
       setTodayAppointments(list);
-      ok(`Loaded ${list.length} appointment(s) for today`);
+      ok(`${list.length} appointment(s) ready for today`);
     } catch (e) { err(e); }
   };
 
@@ -131,16 +166,17 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
       const list = await appointmentApi.getAssignedPending(apiContext);
       setAssignedAppointments(list);
       if (list.length) selectForCheckIn(list[0]);
-      ok(`Loaded ${list.length} assigned appointment(s)`);
+      ok(`${list.length} assigned appointment(s) ready`);
     } catch (e) { err(e); }
   };
 
   const loadPendingForPatient = async () => {
     try {
-      const list = await appointmentApi.getPendingForPatient(apiContext, lookupPatientId.trim());
+      const patient = await loadPatientByMrn(lookupPatientMrn);
+      const list = await appointmentApi.getPendingForPatient(apiContext, patient.id);
       setPendingByPatient(list);
       if (list.length) selectForCheckIn(list[0]);
-      ok(`Loaded ${list.length} pending appointment(s)`);
+      ok(`${list.length} pending appointment(s) ready for ${patient.fullName}`);
     } catch (e) { err(e); }
   };
 
@@ -156,7 +192,6 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
         },
       );
       setLatestCheckIn(response);
-      setLastResponse(response);
       if (response.queueTicket?.id) onQueueTicketLinked?.(response.queueTicket.id);
 
       // Show tracking number (full date-scoped) and short ticket number
@@ -169,13 +204,15 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
 
   const cancelAppointment = async () => {
     try {
+      const appointment = findAppointmentByNumber(cancelAppointmentNumber);
       const response = await appointmentApi.cancel(
         apiContext,
-        cancelAppointmentId.trim(),
+        appointment.id,
         cancelReason || undefined,
       );
-      setLastResponse(response);
-      ok("Appointment cancelled");
+      setCancelAppointmentId(response.id);
+      setCancelAppointmentNumber(response.appointmentNumber || appointment.appointmentNumber || "");
+      ok(`Appointment cancelled: ${response.appointmentNumber || appointment.appointmentNumber || "selected appointment"}`);
     } catch (e) { err(e); }
   };
 
@@ -204,7 +241,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
                 {/* Header row */}
                 <View style={as.apptRowHeader}>
                   <Text style={[as.apptNumber, { color: T.teal }]}>
-                    {appt.appointmentNumber || appt.id.slice(0, 8)}
+                    {appt.appointmentNumber || "Pending appointment number"}
                   </Text>
                   <View style={[as.statusPill, { backgroundColor: pill.bg, borderColor: pill.border }]}>
                     <Text style={[as.statusPillText, { color: pill.text }]}>{appt.status}</Text>
@@ -213,7 +250,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
 
                 {/* Details */}
                 {[
-                  ["Patient",   appt.patientName || appt.patientId || "—"],
+                  ["Patient",   appt.patientName || "Patient"],
                   ["Date/Time", formatDateTime(appt.scheduledAt)],
                   ["Hospital",  appt.facilityName || "Current facility"],
                   ["Doctor",    appt.clinicianName || "Unassigned"],
@@ -252,7 +289,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
     <>
       {/* Schedule */}
       <Card title="Schedule Appointment">
-        <InputField label="Patient UUID"          value={patientId}       onChangeText={setPatientId} />
+        <InputField label="Patient ID"            value={patientMrn}      onChangeText={setPatientMrn} />
         <InputField
           label="Scheduled at (ISO-8601)"
           value={scheduledAt}
@@ -260,7 +297,6 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
           placeholder="2026-03-11T14:30:00Z"
         />
         <InputField label="Duration (minutes)"   value={durationMinutes}     onChangeText={setDurationMinutes} />
-        <InputField label="Clinician UUID (opt)" value={clinicianId}         onChangeText={setClinicianId} />
         <InputField label="Clinician name (opt)" value={clinicianName}       onChangeText={setClinicianName} />
         <InputField label="Clinician employee ID" value={clinicianEmployeeId} onChangeText={setClinicianEmployeeId} />
         <InputField label="Department code (opt)" value={departmentCode}      onChangeText={setDepartmentCode} />
@@ -268,8 +304,8 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
         <InputField label="Reason"               value={reason}              onChangeText={setReason} multiline />
         <InlineActions>
           <ActionButton label="Schedule"                onPress={scheduleAppointment} />
-          <ActionButton label="Load today's"           onPress={loadToday}         variant="secondary" />
-          <ActionButton label="Load assigned pending"   onPress={loadAssignedPending} variant="secondary" />
+          <ActionButton label="Today's Appointments"   onPress={loadToday}         variant="secondary" />
+          <ActionButton label="Assigned Appointments"  onPress={loadAssignedPending} variant="secondary" />
         </InlineActions>
         <MessageBanner message={message} tone={tone} />
       </Card>
@@ -277,16 +313,17 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
       {/* Check-in */}
       <Card title="Pending / Check-In">
         <InputField
-          label="Patient UUID (pending lookup)"
-          value={lookupPatientId}
-          onChangeText={setLookupPatientId}
+          label="Patient ID"
+          value={lookupPatientMrn}
+          onChangeText={setLookupPatientMrn}
           placeholder="Load pending appointments for one patient"
         />
         <InlineActions>
-          <ActionButton label="Load pending for patient" onPress={loadPendingForPatient} />
+          <ActionButton label="Pending For Patient" onPress={loadPendingForPatient} />
         </InlineActions>
-        <InputField label="Appointment UUID"      value={checkInAppointmentId} onChangeText={setCheckInAppointmentId} />
-        <InputField label="Patient UUID"          value={checkInPatientId}     onChangeText={setCheckInPatientId} />
+        <InputField label="Selected Appointment Number" value={cancelAppointmentNumber} onChangeText={setCancelAppointmentNumber} />
+        <InputField label="Selected Patient Name" value={selectedPatient?.fullName || ""} onChangeText={() => undefined} />
+        <InputField label="Selected Patient ID" value={selectedPatient?.mrn || lookupPatientMrn} onChangeText={setLookupPatientMrn} />
         <InputField label="Complaint (optional)"  value={checkInComplaint}     onChangeText={setCheckInComplaint} multiline />
         <ToggleField
           label="Consent for same-hospital historical data access"
@@ -300,7 +337,7 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
 
       {/* Cancel */}
       <Card title="Cancel Appointment">
-        <InputField label="Appointment UUID"          value={cancelAppointmentId} onChangeText={setCancelAppointmentId} />
+        <InputField label="Appointment Number"        value={cancelAppointmentNumber} onChangeText={setCancelAppointmentNumber} />
         <InputField label="Cancel reason (optional)"  value={cancelReason}        onChangeText={setCancelReason} multiline />
         <InlineActions>
           <ActionButton label="Cancel Appointment" onPress={cancelAppointment} variant="danger" />
@@ -331,19 +368,12 @@ export function AppointmentsScreen({ onQueueTicketLinked }: AppointmentsScreenPr
           </View>
           <View style={{ gap: 4, marginTop: 10 }}>
             <Text style={{ color: T.textMid, fontSize: 13 }}>
-              Appointment: {latestCheckIn.appointment.appointmentNumber || latestCheckIn.appointment.id}
+              Appointment: {latestCheckIn.appointment.appointmentNumber || "Confirmed appointment"}
             </Text>
             <Text style={{ color: T.textMid, fontSize: 13 }}>
               Hospital: {latestCheckIn.appointment.facilityName || "Current Facility"}
             </Text>
           </View>
-          <JsonPanel value={latestCheckIn} />
-        </Card>
-      ) : null}
-
-      {lastResponse && !latestCheckIn ? (
-        <Card title="Last Action Response">
-          <JsonPanel value={lastResponse} />
         </Card>
       ) : null}
     </>

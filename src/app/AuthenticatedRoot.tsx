@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { authApi } from "../api/services";
+import { ChangePasswordModal } from "../components/account/ChangePasswordModal";
 import { ActionButton, AppShell, MessageBanner, ThemeToggleButton, useTheme } from "../components/ui";
+import { useClientIdleLogout } from "../hooks/useClientIdleLogout";
 import { LoginScreen } from "../screens/auth/LoginScreen";
 import { KioskWorkspaceScreen } from "../screens/kiosk/KioskWorkspaceScreen";
 import { PatientWorkspaceScreen } from "../screens/patient/PatientWorkspaceScreen";
@@ -9,11 +11,14 @@ import { StaffWorkspaceScreen } from "../screens/staff/StaffWorkspaceScreen";
 import { useSession } from "../state/session";
 import { useCheckInDeepLink } from "../hooks/useCheckInDeepLink";
 
+const CLIENT_IDLE_TIMEOUT_MS = 300_000;
+
 export function AuthenticatedRoot() {
   const { actor, username, apiContext, signOut, bootstrapped } = useSession();
   const { theme: T } = useTheme();
 
-  const [message, setMessage] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ text: string; tone: "success" | "error" | "info" } | null>(null);
+  const [changePasswordVisible, setChangePasswordVisible] = useState(false);
   const [staffRequestedTab, setStaffRequestedTab] = useState<"profile" | null>(null);
   const checkInDeepLinkPrefill = useCheckInDeepLink();
 
@@ -29,8 +34,31 @@ export function AuthenticatedRoot() {
   }, [username]);
 
   useEffect(() => {
-    if (actor) setMessage(null);
+    if (actor) setBanner(null);
   }, [actor]);
+
+  const isIdleLogoutEnabled = actor === "STAFF" || actor === "PATIENT";
+
+  const logout = useCallback(async (payload?: { text: string; tone: "success" | "error" | "info" }) => {
+    if (!apiContext) {
+      await signOut();
+      if (payload) {
+        setBanner(payload);
+      }
+      return;
+    }
+    try { await authApi.logout(apiContext); } catch { /* still clear local state */ }
+    finally {
+      await signOut();
+      setBanner(payload || { text: "Signed out", tone: "success" });
+    }
+  }, [apiContext, signOut]);
+
+  const markClientActivity = useClientIdleLogout({
+    enabled: isIdleLogoutEnabled,
+    timeoutMs: CLIENT_IDLE_TIMEOUT_MS,
+    onTimeout: () => logout({ text: "Session timed out after 5 minutes of inactivity", tone: "error" }),
+  });
 
   if (!bootstrapped) {
     return (
@@ -41,45 +69,64 @@ export function AuthenticatedRoot() {
   }
 
   if (!actor || !apiContext) {
-    return <LoginScreen />;
+    return (
+      <View style={{ flex: 1 }}>
+        <LoginScreen />
+        {banner ? (
+          <View style={{ position: "absolute", top: 72, left: 16, right: 16, zIndex: 30 }}>
+            <MessageBanner message={banner.text} tone={banner.tone} />
+          </View>
+        ) : null}
+      </View>
+    );
   }
 
-  const logout = async () => {
-    try { await authApi.logout(apiContext); } catch { /* still clear local state */ }
-    finally { await signOut(); setMessage("Signed out"); }
-  };
-
   return (
-    <AppShell
-      title={title}
-      subtitle={subtitle}
-      rightAction={
-        actor === "KIOSK" ? undefined : (
-          <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-            {/* Theme toggle is always available to staff and patients */}
-            <ThemeToggleButton />
-            {actor === "STAFF" && (
-              <ActionButton
-                label="Profile"
-                onPress={() => setStaffRequestedTab("profile")}
-                variant="ghost"
-              />
-            )}
-            <ActionButton label="Sign Out" onPress={logout} variant="ghost" />
-          </View>
-        )
-      }
-    >
-      <MessageBanner message={message} tone="success" />
-
-      {actor === "STAFF" && (
-        <StaffWorkspaceScreen
-          requestedTab={staffRequestedTab}
-          onRequestedTabHandled={() => setStaffRequestedTab(null)}
+    <View style={{ flex: 1 }} onTouchStart={markClientActivity}>
+      <AppShell
+        title={title}
+        subtitle={subtitle}
+        rightAction={
+          actor === "KIOSK" ? undefined : (
+            <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+              {/* Theme toggle is always available to staff and patients */}
+              <ThemeToggleButton />
+              {actor === "STAFF" && (
+                <ActionButton
+                  label="Profile"
+                  onPress={() => setStaffRequestedTab("profile")}
+                  variant="ghost"
+                />
+              )}
+              {actor === "PATIENT" ? (
+                <ActionButton
+                  label="Change Password"
+                  onPress={() => setChangePasswordVisible(true)}
+                  variant="ghost"
+                />
+              ) : null}
+              <ActionButton label="Sign Out" onPress={() => logout()} variant="ghost" />
+            </View>
+          )
+        }
+      >
+        <MessageBanner message={banner?.text || null} tone={banner?.tone || "success"} />
+        <ChangePasswordModal
+          visible={changePasswordVisible}
+          onClose={() => setChangePasswordVisible(false)}
+          onSuccess={(nextMessage) => setBanner({ text: nextMessage, tone: "success" })}
         />
-      )}
-      {actor === "KIOSK"   && <KioskWorkspaceScreen />}
-      {actor === "PATIENT" && <PatientWorkspaceScreen deepLinkCheckInPrefill={checkInDeepLinkPrefill} />}
-    </AppShell>
+
+        {actor === "STAFF" && (
+          <StaffWorkspaceScreen
+            requestedTab={staffRequestedTab}
+            onRequestedTabHandled={() => setStaffRequestedTab(null)}
+            onOpenChangePassword={() => setChangePasswordVisible(true)}
+          />
+        )}
+        {actor === "KIOSK"   && <KioskWorkspaceScreen />}
+        {actor === "PATIENT" && <PatientWorkspaceScreen deepLinkCheckInPrefill={checkInDeepLinkPrefill} />}
+      </AppShell>
+    </View>
   );
 }

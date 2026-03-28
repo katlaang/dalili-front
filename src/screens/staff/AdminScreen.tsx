@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { adminPortalApi, authApi } from "../../api/services";
+import { authApi } from "../../api/services";
 import { ActionButton, Card, ChoiceChips, InlineActions, InputField, JsonPanel, MessageBanner } from "../../components/ui";
 import { DEFAULT_KIOSK_DEVICE_ID, DEFAULT_KIOSK_DEVICE_SECRET } from "../../config/env";
 import { useSession } from "../../state/session";
@@ -38,7 +38,6 @@ export function AdminScreen() {
   const [staffPassword, setStaffPassword] = useState("");
   const [staffRole, setStaffRole] = useState<StaffRoleOption>("NURSE");
   const [patientProfileId, setPatientProfileId] = useState("");
-  const [staffResult, setStaffResult] = useState<unknown>(null);
   const [staffMessage, setStaffMessage] = useState<string | null>(null);
   const [staffTone, setStaffTone] = useState<"error" | "success">("success");
 
@@ -49,15 +48,8 @@ export function AdminScreen() {
   const [kioskMessage, setKioskMessage] = useState<string | null>(null);
   const [kioskTone, setKioskTone] = useState<"error" | "success">("success");
 
-  const [staffAccounts, setStaffAccounts] = useState<unknown>(null);
-  const [activeSessions, setActiveSessions] = useState<unknown>(null);
-  const [auditEvents, setAuditEvents] = useState<unknown>(null);
-  const [monitoringMessage, setMonitoringMessage] = useState<string | null>(null);
-  const [monitoringTone, setMonitoringTone] = useState<"error" | "success">("success");
-
   const operatorRole = (role || "").toUpperCase();
   const canCreateAdmins = useMemo(() => operatorRole === "SUPER_ADMIN", [operatorRole]);
-  const canViewIdentityData = useMemo(() => operatorRole === "SUPER_ADMIN", [operatorRole]);
 
   const effectiveStaffRole = profileType === "CONSULTANT" ? "PHYSICIAN" : staffRole;
   const requiredStaffPrefix = effectiveStaffRole === "PHYSICIAN" ? "CL" : effectiveStaffRole === "NURSE" ? "NS" : "RC";
@@ -109,7 +101,6 @@ export function AdminScreen() {
         email: staffEmail.trim(),
         role: effectiveStaffRole
       });
-      setStaffResult(response);
       setStaffPassword("");
       setStaffMessage(`Profile created: ${staffUsername.trim()} (${effectiveStaffRole}).`);
       setStaffTone("success");
@@ -127,7 +118,6 @@ export function AdminScreen() {
         password: staffPassword,
         patientId: patientProfileId.trim()
       });
-      setStaffResult(response);
       setStaffPassword("");
       setStaffMessage("Patient portal profile created.");
       setStaffTone("success");
@@ -154,47 +144,11 @@ export function AdminScreen() {
     }
   };
 
-  const loadStaffAccounts = async () => {
-    try {
-      const response = await adminPortalApi.getStaffAccounts(apiContext);
-      setStaffAccounts(response);
-      setMonitoringMessage("Non-patient account list loaded.");
-      setMonitoringTone("success");
-    } catch (error) {
-      setMonitoringMessage(toErrorMessage(error));
-      setMonitoringTone("error");
-    }
-  };
-
-  const loadActiveSessions = async () => {
-    try {
-      const response = await adminPortalApi.getActiveSessions(apiContext);
-      setActiveSessions(response);
-      setMonitoringMessage("Active non-patient sessions loaded.");
-      setMonitoringTone("success");
-    } catch (error) {
-      setMonitoringMessage(toErrorMessage(error));
-      setMonitoringTone("error");
-    }
-  };
-
-  const loadAuditEvents = async () => {
-    try {
-      const response = await adminPortalApi.getAuditEvents(apiContext, 100);
-      setAuditEvents(response);
-      setMonitoringMessage("Audit logs loaded (patient details redacted).");
-      setMonitoringTone("success");
-    } catch (error) {
-      setMonitoringMessage(toErrorMessage(error));
-      setMonitoringTone("error");
-    }
-  };
-
   return (
     <>
       <Card title="Admin Portal">
         <MessageBanner
-          message="Create staff, consultant, and patient accounts. Identity and audit logs are available in this portal."
+          message="Create staff, consultant, and patient accounts from this portal."
           tone="info"
         />
       </Card>
@@ -302,45 +256,14 @@ export function AdminScreen() {
         <MessageBanner message={kioskMessage} tone={kioskTone} />
       </Card>
 
-      {canViewIdentityData ? (
-        <Card title="Identity & Audit">
-          <InlineActions>
-            <ActionButton label="Load Staff Accounts" onPress={loadStaffAccounts} />
-            <ActionButton label="Load Active Sessions" onPress={loadActiveSessions} variant="secondary" />
-            <ActionButton label="Load Audit Logs" onPress={loadAuditEvents} variant="secondary" />
-          </InlineActions>
-          <MessageBanner message={monitoringMessage} tone={monitoringTone} />
-        </Card>
-      ) : null}
-
       {kioskResult ? (
         <Card title="Kiosk Registration Result">
           <JsonPanel value={kioskResult} />
         </Card>
       ) : null}
-      {staffResult ? (
-        <Card title="Profile Creation Result">
-          <JsonPanel value={staffResult} />
-        </Card>
-      ) : null}
       {adminResult ? (
         <Card title="Admin Registration Result">
           <JsonPanel value={adminResult} />
-        </Card>
-      ) : null}
-      {staffAccounts ? (
-        <Card title="Non-Patient Accounts">
-          <JsonPanel value={staffAccounts} />
-        </Card>
-      ) : null}
-      {activeSessions ? (
-        <Card title="Active Non-Patient Sessions">
-          <JsonPanel value={activeSessions} />
-        </Card>
-      ) : null}
-      {auditEvents ? (
-        <Card title="Audit Logs (Redacted)">
-          <JsonPanel value={auditEvents} />
         </Card>
       ) : null}
     </>

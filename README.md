@@ -57,7 +57,7 @@ src/
 
 ## Run
 
-1. Start the backend (this repo) on port `8080`.
+1. Start the backend (this repo) on port `8181`.
 2. In another terminal:
 
 ```bash
@@ -73,8 +73,8 @@ Then choose:
 
 ## API URL
 
-- Default web URL: `http://localhost:8080`
-- Default Android emulator URL: `http://10.0.2.2:8080`
+- Default web URL: `http://localhost:8181`
+- Default Android emulator URL: `http://10.0.2.2:8181`
 - You can change this in the login screen ("Backend Base URL").
 
 ## Notes
