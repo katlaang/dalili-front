@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { clinicalPortalApi } from "../../api/services";
 import type { PatientResponse } from "../../api/types";
-import { ActionButton, Card, InlineActions, InputField, MessageBanner, useTheme } from "../../components/ui";
+import { AccessReasonModal, ActionButton, Card, InlineActions, InputField, MessageBanner, useTheme } from "../../components/ui";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 import { formatDateOnly, formatFieldLabel, resolvePatientByInput, summarizeUnknown } from "./patientServiceUtils";
@@ -67,6 +67,7 @@ export function PatientAccessScreen({
   const [lastAuthorization, setLastAuthorization] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [tone, setTone] = useState<"success" | "error" | "info">("info");
+  const [pendingProtectedAction, setPendingProtectedAction] = useState<"scope" | "overview" | "emergency" | null>(null);
 
   useEffect(() => {
     if (!prefillPatientId || !apiContext) {
@@ -113,34 +114,36 @@ export function PatientAccessScreen({
     return patient;
   };
 
-  const checkAccess = async () => {
+  const performProtectedAction = async (action: "scope" | "overview" | "emergency", reason: string, detail?: string) => {
     try {
       const patient = await resolvePatientRecord();
-      const data = await clinicalPortalApi.getScope(apiContext, patient.id);
-      setScope(data);
-      showSuccess("Patient access checked");
-    } catch (error) {
-      showError(error);
-    }
-  };
+      await clinicalPortalApi.recordChartAccess(apiContext, patient.id, {
+        reason,
+        detail: detail || null,
+        viewedArea: "Patient Access",
+        viewedResource:
+          action === "scope"
+            ? "Access Decision"
+            : action === "overview"
+              ? "Patient Summary"
+              : "Emergency Data",
+        accessScope: action === "emergency" ? "EMERGENCY" : "CLINICAL_SUMMARY",
+      });
 
-  const viewSummary = async () => {
-    try {
-      const patient = await resolvePatientRecord();
-      const data = await clinicalPortalApi.getOverview(apiContext, patient.id);
-      setOverview(data);
-      showSuccess("Patient summary ready");
-    } catch (error) {
-      showError(error);
-    }
-  };
-
-  const viewEmergencyDetails = async () => {
-    try {
-      const patient = await resolvePatientRecord();
-      const data = await clinicalPortalApi.getEmergencyData(apiContext, patient.id);
-      setEmergencyData(data);
-      showSuccess("Emergency details ready");
+      if (action === "scope") {
+        const data = await clinicalPortalApi.getScope(apiContext, patient.id);
+        setScope(data);
+        showSuccess("Patient access checked and logged");
+      } else if (action === "overview") {
+        const data = await clinicalPortalApi.getOverview(apiContext, patient.id);
+        setOverview(data);
+        showSuccess("Patient summary opened and logged");
+      } else {
+        const data = await clinicalPortalApi.getEmergencyData(apiContext, patient.id);
+        setEmergencyData(data);
+        showSuccess("Emergency details opened and logged");
+      }
+      setPendingProtectedAction(null);
     } catch (error) {
       showError(error);
     }
@@ -176,6 +179,28 @@ export function PatientAccessScreen({
 
   return (
     <>
+      <AccessReasonModal
+        visible={pendingProtectedAction !== null}
+        title="Open Protected Patient Data"
+        patientLabel={resolvedPatient ? `${resolvedPatient.fullName} (${resolvedPatient.mrn})` : undefined}
+        resourceLabel={
+          pendingProtectedAction === "scope"
+            ? "Access Decision"
+            : pendingProtectedAction === "overview"
+              ? "Patient Summary"
+              : pendingProtectedAction === "emergency"
+                ? "Emergency Data"
+                : undefined
+        }
+        confirmLabel="Log Access and Open"
+        onCancel={() => setPendingProtectedAction(null)}
+        onConfirm={({ reason, detail }) => {
+          if (pendingProtectedAction) {
+            void performProtectedAction(pendingProtectedAction, reason, detail);
+          }
+        }}
+      />
+
       <Card title="Patient Access">
         <InputField
           label="Patient ID"
@@ -198,9 +223,9 @@ export function PatientAccessScreen({
         ) : null}
 
         <InlineActions>
-          <ActionButton label="Check Access" onPress={checkAccess} />
-          <ActionButton label="View Summary" onPress={viewSummary} variant="secondary" />
-          <ActionButton label="View Emergency Details" onPress={viewEmergencyDetails} variant="secondary" />
+          <ActionButton label="Check Access" onPress={() => setPendingProtectedAction("scope")} />
+          <ActionButton label="View Summary" onPress={() => setPendingProtectedAction("overview")} variant="secondary" />
+          <ActionButton label="View Emergency Details" onPress={() => setPendingProtectedAction("emergency")} variant="secondary" />
         </InlineActions>
 
         <InputField

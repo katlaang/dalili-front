@@ -308,7 +308,7 @@ export function ReferralsScreen({
           return acc;
         }, {})
       );
-      showSuccess(`Loaded ${list.length} referral(s) for ${patient.fullName}`);
+      showSuccess(`Showing ${list.length} referral(s) for ${patient.fullName}`);
     } catch (error) {
       showError(error);
     }

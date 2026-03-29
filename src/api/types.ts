@@ -31,6 +31,16 @@ export type PregnancyStatus =
   | "PREGNANT"
   | "POSTPARTUM";
 
+export type PregnancyTestStatus =
+  | "UNKNOWN"
+  | "NOT_APPLICABLE"
+  | "NOT_ORDERED"
+  | "ORDERED"
+  | "PENDING"
+  | "NEGATIVE"
+  | "POSITIVE"
+  | "DECLINED";
+
 export type VulnerabilityIndicator =
   | "ELDERLY"
   | "NEWBORN"
@@ -102,10 +112,27 @@ export interface QueueTicket {
   patientAgeYears?: number | null;
   patientAgeInDays?: number | null;
   pregnancyStatus?: PregnancyStatus | null;
+  pregnancyTestStatus?: PregnancyTestStatus | null;
+  lastMenstrualPeriodDate?: string | null;
+  remembersLastMenstrualPeriod?: boolean | null;
   isPregnant?: boolean | null;
   newborn?: boolean | null;
   elderly?: boolean | null;
+  fetalHealthCheckRequired?: boolean | null;
+  fetalHealthNotes?: string | null;
+  bmi?: number | null;
+  manualRedFlag?: boolean | null;
+  manualRedFlagReason?: string | null;
   vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+  vulnerabilityNotes?: string | null;
+  ancillaryHold?: boolean | null;
+  ancillaryHoldStatus?: string | null;
+  ancillaryHoldReason?: string | null;
+  ancillaryStepCode?: string | null;
+  ancillaryStepLabel?: string | null;
+  ancillaryHoldStartedAt?: string | null;
+  ancillaryHoldResumedAt?: string | null;
+  waitingForPregnancyTest?: boolean | null;
   queueDate: string;
   ticketNumber: string;
   trackingNumber?: string;
@@ -188,7 +215,10 @@ export interface PatientResponse {
   ageYears?: number | null;
   ageInDays?: number | null;
   pregnancyStatus?: PregnancyStatus | null;
+  pregnancyTestStatus?: PregnancyTestStatus | null;
   isPregnant?: boolean | null;
+  manualRedFlag?: boolean | null;
+  manualRedFlagReason?: string | null;
   vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
   vulnerabilityNotes?: string | null;
   consentGiven: boolean;
@@ -205,6 +235,7 @@ export interface TriageAssessment {
   chiefComplaint: string;
   patientAgeYears?: number | null;
   patientAgeInDays?: number | null;
+  patientSex?: string | null;
   temperatureCelsius?: number | string | null;
   heartRateBpm?: number | null;
   bloodPressureSystolic?: number | null;
@@ -213,6 +244,7 @@ export interface TriageAssessment {
   oxygenSaturation?: number | null;
   weightKg?: number | string | null;
   heightCm?: number | string | null;
+  bmi?: number | null;
   painScore?: number | null;
   bloodGlucoseMmol?: number | string | null;
   consciousnessLevel?: string | null;
@@ -225,10 +257,17 @@ export interface TriageAssessment {
   alteredMentalStatus?: boolean;
   pregnancyConcern?: boolean;
   severeAbdominalPain?: boolean;
+  manualRedFlag?: boolean | null;
+  manualRedFlagReason?: string | null;
   pregnancyStatus?: PregnancyStatus | null;
+  pregnancyTestStatus?: PregnancyTestStatus | null;
+  lastMenstrualPeriodDate?: string | null;
+  remembersLastMenstrualPeriod?: boolean | null;
   pregnant?: boolean | null;
   newborn?: boolean | null;
   elderly?: boolean | null;
+  fetalHealthCheckRequired?: boolean | null;
+  fetalHealthNotes?: string | null;
   vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
   vulnerabilityNotes?: string | null;
   historyOfPresentIllness?: string | null;
@@ -286,8 +325,12 @@ export interface EncounterPreviewQueueSummary {
   patientAgeYears?: number | null;
   patientAgeInDays?: number | null;
   pregnancyStatus?: PregnancyStatus | null;
+  pregnancyTestStatus?: PregnancyTestStatus | null;
   isPregnant?: boolean | null;
+  manualRedFlag?: boolean | null;
+  manualRedFlagReason?: string | null;
   vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
+  vulnerabilityNotes?: string | null;
 }
 
 export interface EncounterPreviewTriageSummary {
@@ -298,6 +341,10 @@ export interface EncounterPreviewTriageSummary {
   bloodPressureDiastolic?: number | null;
   respiratoryRate?: number | null;
   oxygenSaturation?: number | null;
+  weightKg?: number | null;
+  heightCm?: number | null;
+  bmi?: number | null;
+  painScore?: number | null;
   allergies?: string | null;
   currentMedications?: string | null;
   pastMedicalHistory?: string | null;
@@ -305,9 +352,16 @@ export interface EncounterPreviewTriageSummary {
   nursingNotes?: string | null;
   finalTriageLevel?: string | null;
   pregnancyStatus?: PregnancyStatus | null;
+  pregnancyTestStatus?: PregnancyTestStatus | null;
+  lastMenstrualPeriodDate?: string | null;
+  remembersLastMenstrualPeriod?: boolean | null;
   pregnant?: boolean | null;
   newborn?: boolean | null;
   elderly?: boolean | null;
+  fetalHealthCheckRequired?: boolean | null;
+  fetalHealthNotes?: string | null;
+  manualRedFlag?: boolean | null;
+  manualRedFlagReason?: string | null;
   vulnerabilityIndicators?: VulnerabilityIndicator[] | null;
   vulnerabilityNotes?: string | null;
 }
@@ -642,14 +696,117 @@ export interface EncounterNoteView {
 
 export interface PortalMessageView {
   id: string;
+  threadId?: string | null;
+  parentMessageId?: string | null;
+  patientId?: string | null;
+  patientMrn?: string | null;
+  patientName?: string | null;
+  senderId?: string | null;
+  senderRole?: string | null;
   direction?: string;
   category?: string;
   senderName?: string;
+  recipientId?: string | null;
+  recipientRole?: string | null;
   recipientName?: string;
+  readById?: string[] | null;
+  linkedEncounterId?: string | null;
+  linkedMedicationOrderId?: string | null;
+  linkedLabResultId?: string | null;
+  linkedReferralId?: string | null;
   subject?: string;
   body: string;
   createdAt?: string;
   readAt?: string;
+}
+
+export interface MessageThreadSummary {
+  threadId?: string | null;
+  patientId?: string | null;
+  patientMrn?: string | null;
+  patientName?: string | null;
+  subject?: string | null;
+  category?: string | null;
+  latestPreview?: string | null;
+  latestMessageId?: string | null;
+  latestTimestamp?: string | null;
+  latestSenderName?: string | null;
+  latestSenderRole?: string | null;
+  latestFromPatient?: boolean;
+  unreadCount: number;
+  messageCount: number;
+}
+
+export interface MessageThreadDetail {
+  threadId?: string | null;
+  patientId?: string | null;
+  patientMrn?: string | null;
+  patientName?: string | null;
+  subject?: string | null;
+  category?: string | null;
+  latestTimestamp?: string | null;
+  unreadCount: number;
+  messages: PortalMessageView[];
+}
+
+export interface ChartAccessLogEntry {
+  id: string;
+  viewerId?: string | null;
+  viewerFullName?: string | null;
+  viewerRole?: string | null;
+  patientId?: string | null;
+  patientMrn?: string | null;
+  patientName?: string | null;
+  viewedArea?: string | null;
+  viewedResource?: string | null;
+  accessScope?: string | null;
+  reason?: string | null;
+  detail?: string | null;
+  accessedAt?: string | null;
+}
+
+export interface ChartAccessLogResponse {
+  entries: ChartAccessLogEntry[];
+  total?: number | null;
+}
+
+export type DelegatedInstructionType =
+  | "PREPARE_REFERRAL"
+  | "ARRANGE_LAB"
+  | "ARRANGE_IMAGING"
+  | "FOLLOW_UP_CALL"
+  | "PATIENT_EDUCATION"
+  | "MEDICATION_COUNSELING"
+  | "OBSERVE_AND_REPORT"
+  | "OTHER";
+
+export interface StaffRecipientView {
+  id: string;
+  username?: string | null;
+  employeeId?: string | null;
+  fullName?: string | null;
+  role?: string | null;
+}
+
+export interface DelegatedInstructionView {
+  id: string;
+  encounterId?: string | null;
+  patientId?: string | null;
+  patientMrn?: string | null;
+  patientName?: string | null;
+  recipientUserId?: string | null;
+  recipientName?: string | null;
+  recipientRole?: string | null;
+  instructionType: DelegatedInstructionType | string;
+  priority?: string | null;
+  subject: string;
+  body: string;
+  status?: string | null;
+  createdAt?: string | null;
+  createdByName?: string | null;
+  linkedReferralId?: string | null;
+  linkedLabResultId?: string | null;
+  linkedImagingOrderId?: string | null;
 }
 
 export interface RenewalRequestView {

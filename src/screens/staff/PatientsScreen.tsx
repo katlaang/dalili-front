@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { appointmentApi, patientApi } from "../../api/services";
+import { appointmentApi, clinicalPortalApi, patientApi } from "../../api/services";
 import type { AppointmentView, PatientResponse } from "../../api/types";
 import { sexOptions } from "../../config/options";
 import {
+  AccessReasonModal,
   ActionButton,
   Card,
   ChoiceChips,
@@ -263,7 +264,12 @@ const PATIENT_SECTION_LABELS: Record<PatientSection, string> = {
   updates: "Patient Updates",
 };
 
-export function PatientsScreen() {
+interface PatientsScreenProps {
+  onOpenMessaging?: (patientId: string, patientName: string) => void;
+  onOpenPatientAccess?: (patientId: string, patientName: string) => void;
+}
+
+export function PatientsScreen({ onOpenMessaging, onOpenPatientAccess }: PatientsScreenProps) {
   const { apiContext, role, username } = useSession();
   const { theme: T } = useTheme();
   const [section, setSection] = useState<PatientSection>("register");
@@ -283,6 +289,7 @@ export function PatientsScreen() {
   const [appointmentClinicianName, setAppointmentClinicianName] = useState("");
   const [appointmentClinicianEmployeeId, setAppointmentClinicianEmployeeId] = useState("");
   const [appointmentResult, setAppointmentResult] = useState<AppointmentView | null>(null);
+  const [accessModalVisible, setAccessModalVisible] = useState(false);
 
   useEffect(() => {
     if ((role === "PHYSICIAN" || role === "NURSE") && username) {
@@ -324,9 +331,27 @@ export function PatientsScreen() {
 
   const requireSelectedPatient = () => {
     if (!selectedPatient) {
-      throw new Error("Load a patient first using Patient Lookup.");
+      throw new Error("Select a patient first using Patient Lookup.");
     }
     return selectedPatient;
+  };
+
+  const openMedicalRecord = async (reason: string, detail?: string) => {
+    try {
+      const patient = requireSelectedPatient();
+      await clinicalPortalApi.recordChartAccess(apiContext, patient.id, {
+        reason,
+        detail: detail || null,
+        viewedArea: "Patients",
+        viewedResource: "Full Chart",
+        accessScope: "CLINICAL_SUMMARY",
+      });
+      setAccessModalVisible(false);
+      onOpenPatientAccess?.(patient.id, patient.fullName);
+      showSuccess(`Access logged for ${patient.fullName}`);
+    } catch (error) {
+      showError(error);
+    }
   };
 
   const registerPatient = async () => {
@@ -448,6 +473,7 @@ export function PatientsScreen() {
         ageInDays: selectedPatient.ageInDays,
         pregnancyStatus: selectedPatient.pregnancyStatus,
         isPregnant: selectedPatient.isPregnant,
+        manualRedFlag: selectedPatient.manualRedFlag,
         vulnerabilityIndicators: selectedPatient.vulnerabilityIndicators,
       })
     : [];
@@ -455,6 +481,16 @@ export function PatientsScreen() {
 
   return (
     <>
+      <AccessReasonModal
+        visible={accessModalVisible}
+        title="Open Medical Record"
+        patientLabel={selectedPatient ? `${selectedPatient.fullName} (${selectedPatient.mrn})` : undefined}
+        resourceLabel="Full Chart"
+        confirmLabel="Log Access and Open"
+        onCancel={() => setAccessModalVisible(false)}
+        onConfirm={({ reason, detail }) => void openMedicalRecord(reason, detail)}
+      />
+
       <Card title="">
         <View style={patientsUi.sectionTabs}>
           {PATIENT_SECTIONS.map((item) => (
@@ -529,6 +565,22 @@ export function PatientsScreen() {
               </View>
             ))}
           </View>
+          <InlineActions>
+            {onOpenMessaging ? (
+              <ActionButton
+                label="Message Patient"
+                onPress={() => onOpenMessaging(selectedPatient.id, selectedPatient.fullName)}
+                variant="secondary"
+              />
+            ) : null}
+            {onOpenPatientAccess ? (
+              <ActionButton
+                label="Open Medical Record"
+                onPress={() => setAccessModalVisible(true)}
+                variant="ghost"
+              />
+            ) : null}
+          </InlineActions>
         </Card>
       ) : null}
 
@@ -574,19 +626,19 @@ export function PatientsScreen() {
       {section === "appointments" ? (
         <Card title="Book Appointment">
           {!selectedPatient ? (
-            <MessageBanner message="Load a patient first in Patient Lookup before booking an appointment." tone="info" />
+            <MessageBanner message="Select a patient first in Patient Lookup before booking an appointment." tone="info" />
           ) : null}
           <InputField
             label="Patient ID"
             value={selectedPatient?.mrn || ""}
             onChangeText={() => undefined}
-            placeholder="Loaded from Patient Lookup"
+            placeholder="From Patient Lookup"
           />
           <InputField
             label="Patient Name"
             value={selectedPatient?.fullName || ""}
             onChangeText={() => undefined}
-            placeholder="Loaded from Patient Lookup"
+            placeholder="From Patient Lookup"
           />
           {Platform.OS === "web" ? (
             <View style={{ gap: 4 }}>
@@ -635,19 +687,19 @@ export function PatientsScreen() {
       {section === "updates" ? (
         <Card title="Patient Updates">
           {!selectedPatient ? (
-            <MessageBanner message="Load a patient first in Patient Lookup before updating contact or consent." tone="info" />
+            <MessageBanner message="Select a patient first in Patient Lookup before updating contact or consent." tone="info" />
           ) : null}
           <InputField
             label="Patient ID"
             value={selectedPatient?.mrn || ""}
             onChangeText={() => undefined}
-            placeholder="Loaded from Patient Lookup"
+            placeholder="From Patient Lookup"
           />
           <InputField
             label="Patient Name"
             value={selectedPatient?.fullName || ""}
             onChangeText={() => undefined}
-            placeholder="Loaded from Patient Lookup"
+            placeholder="From Patient Lookup"
           />
           <InputField label="Phone Number" value={phoneNumber} onChangeText={setPhoneNumber} />
           <InputField label="Email" value={email} onChangeText={setEmail} />

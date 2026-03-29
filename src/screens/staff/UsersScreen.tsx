@@ -119,7 +119,7 @@ export function UsersScreen() {
         try {
           const response = await adminPortalApi.getStaffAccounts(apiContext);
           setUsers(response.map(account => ({ ...account })));
-          setMessage("Loaded non-patient accounts from the super-admin endpoint. Restart the backend if you also want patient portal users listed here.");
+          setMessage("Showing non-patient accounts from the super-admin endpoint. Restart the backend if you also want patient portal users listed here.");
           setTone("success");
           return;
         } catch (fallbackError) {
@@ -140,7 +140,7 @@ export function UsersScreen() {
     try {
       const response = await adminPortalApi.getActiveSessions(apiContext);
       setActiveSessions(response);
-      setMessage("Active sessions loaded.");
+      setMessage("Showing active sessions.");
       setTone("success");
     } catch (error) {
       setMessage(toErrorMessage(error));
@@ -155,7 +155,7 @@ export function UsersScreen() {
     try {
       const response = await adminPortalApi.getAuditEvents(apiContext, 100);
       setAuditEvents(response);
-      setMessage("Audit logs loaded.");
+      setMessage("Showing audit logs.");
       setTone("success");
     } catch (error) {
       setMessage(toErrorMessage(error));
@@ -222,10 +222,10 @@ export function UsersScreen() {
         <InlineActions>
           <ActionButton label="Refresh Users" onPress={loadUsers} />
           {canViewSuperAdminData ? (
-            <ActionButton label="Load Sessions" onPress={loadActiveSessions} variant="secondary" />
+            <ActionButton label="Active Sessions" onPress={loadActiveSessions} variant="secondary" />
           ) : null}
           {canViewSuperAdminData ? (
-            <ActionButton label="Load Audit Logs" onPress={loadAuditEvents} variant="secondary" />
+            <ActionButton label="Audit Logs" onPress={loadAuditEvents} variant="secondary" />
           ) : null}
         </InlineActions>
         <MessageBanner message={message} tone={tone} />

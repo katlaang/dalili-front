@@ -1,31 +1,21 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { ApiError } from "../../api/client";
 import { authApi } from "../../api/services";
 import type { LoginResponse } from "../../api/types";
-import { DEFAULT_KIOSK_DEVICE_ID, DEFAULT_KIOSK_DEVICE_SECRET } from "../../config/env";
+import { DEFAULT_KIOSK_DEVICE_ID, DEFAULT_KIOSK_DEVICE_SECRET, IS_PATIENT_APP, IS_STAFF_APP } from "../../config/env";
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 
 // ─── LOGIN SCREEN ─────────────────────────────────────────────────────────────
-// Supports PATIENT and STAFF actors only.
-// Kiosk runs on its own dedicated screen (KioskWorkspaceScreen) and never
-// passes through this login flow.
+// This login screen is variant-driven.
+// Staff app: STAFF only, plus admin and localhost kiosk entry.
+// Patient app: PATIENT only.
+// Kiosk runs on its own dedicated screen and never uses this login form.
 
 type LoginMode  = "PATIENT" | "STAFF";
 type AuthPanel  = "LOGIN" | "ADMIN_LOGIN" | "ADMIN_SETUP";
-export type ColorScheme = "dark" | "light";
-
-const DARK = {
-  bg:        "#0b1623",
-  surface:   "rgba(15,30,46,0.90)",
-  border:    "#1a3045",
-  text:      "#d4e8f5",
-  textMid:   "#7aaccb",
-  textMuted: "#3a6080",
-  teal:      "#2DD4BF",
-  inputBg:   "rgba(255,255,255,0.06)",
-} as const;
+const LOGIN_MODES: LoginMode[] = IS_PATIENT_APP ? ["PATIENT"] : ["STAFF"];
 
 const LIGHT = {
   bg:        "#f0f7fc",
@@ -41,12 +31,12 @@ const LIGHT = {
 const CLINIC_OPTIONS = ["Dalili Health Clinic", "Sunrise Community Clinic"] as const;
 
 // Satin wave + watermark (web only — degrades gracefully on native)
-function SatinBackground({ scheme }: { scheme: ColorScheme }) {
+function SatinBackground() {
   if (typeof document === "undefined") return null;
-  const teal = scheme === "dark" ? "#2DD4BF" : "#0d9488";
-  const waveOpacity = scheme === "dark" ? 0.17 : 0.10;
+  const teal = "#0d9488";
+  const waveOpacity = 0.10;
   return (
-    <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFillObject, { pointerEvents: "none" }]}>
       {/* @ts-ignore — SVG renders fine in RN Web */}
       <svg
         width="100%" height="100%"
@@ -104,6 +94,10 @@ function getUsernameVariants(value: string) {
   return Array.from(new Set([trimmed, trimmed.toUpperCase(), trimmed.toLowerCase()]));
 }
 
+function getLoginScheme(): "dark" | "light" {
+  return "light";
+}
+
 function canRetryWithDifferentUsernameCase(error: unknown) {
   if (error instanceof ApiError) {
     return error.status === 400 || error.status === 401 || error.status === 404;
@@ -142,9 +136,10 @@ async function loginIgnoringUsernameCase(
 export function LoginScreen() {
   const { baseUrl, signIn } = useSession();
 
-  const [scheme, setScheme]     = useState<ColorScheme>("dark");
+  const scheme = getLoginScheme();
+  const setScheme = (_next: "dark" | "light" | ((current: "dark" | "light") => "dark" | "light")) => undefined;
   const [panel,  setPanel]      = useState<AuthPanel>("LOGIN");
-  const [mode,   setMode]       = useState<LoginMode>("PATIENT");
+  const [mode,   setMode]       = useState<LoginMode>(LOGIN_MODES[0] || "STAFF");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -162,18 +157,28 @@ export function LoginScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const showLocalKioskEntry =
+    IS_STAFF_APP &&
     typeof window !== "undefined" &&
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
 
-  const T = scheme === "dark" ? DARK : LIGHT;
+  const T = LIGHT;
 
   useEffect(() => {
+    if (IS_PATIENT_APP) {
+      setBootstrapAllowed(false);
+      return;
+    }
     let active = true;
     authApi.getSuperAdminBootstrapStatus(baseUrl)
       .then(s => { if (active) setBootstrapAllowed(Boolean(s.bootstrapAllowed)); })
       .catch(() => { if (active) setBootstrapAllowed(false); });
     return () => { active = false; };
   }, [baseUrl]);
+
+  useEffect(() => {
+    setMode(LOGIN_MODES[0] || "STAFF");
+    setPanel("LOGIN");
+  }, []);
 
   useEffect(() => {
     if (!bootstrapAllowed && panel === "ADMIN_SETUP") setPanel("LOGIN");
@@ -287,7 +292,7 @@ export function LoginScreen() {
 
   return (
     <View style={[ls.root, { backgroundColor: T.bg }]}>
-      <SatinBackground scheme={scheme} />
+      <SatinBackground />
 
       {/* Theme toggle */}
       <View style={ls.toggleWrap}>
@@ -317,6 +322,7 @@ export function LoginScreen() {
         <View style={[ls.card, { backgroundColor: T.surface, borderColor: T.border }]}>
 
           {/* Admin / back row */}
+          {IS_STAFF_APP ? (
           <View style={ls.adminRow}>
             {panel === "ADMIN_SETUP" ? (
               <Pressable onPress={() => setPanel("LOGIN")}>
@@ -337,13 +343,14 @@ export function LoginScreen() {
               </>
             )}
           </View>
+          ) : null}
 
           {/* ── MAIN LOGIN ── */}
           {panel === "LOGIN" && (
             <>
               {/* PATIENT / STAFF only — no kiosk */}
-              <View style={ls.chips}>
-                {(["PATIENT", "STAFF"] as LoginMode[]).map(m => (
+              {LOGIN_MODES.length > 1 ? <View style={ls.chips}>
+                {LOGIN_MODES.map(m => (
                   <Pressable
                     key={m}
                     onPress={() => { setMode(m); setMessage(null); }}
@@ -358,7 +365,7 @@ export function LoginScreen() {
                     </Text>
                   </Pressable>
                 ))}
-              </View>
+              </View> : null}
 
               <Text style={[ls.label, { color: T.textMuted }]}>Username</Text>
               <TextInput
@@ -481,7 +488,7 @@ export function LoginScreen() {
 
 const ls = StyleSheet.create({
   root:       { flex: 1 },
-  toggleWrap: { position: "absolute", top: 18, right: 22, zIndex: 20 },
+  toggleWrap: { position: "absolute", top: 18, right: 22, zIndex: 20, display: "none" },
   toggleBtn:  { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5 },
   toggleText: { fontSize: 12, fontWeight: "600" },
   centre:     { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },

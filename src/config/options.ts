@@ -45,6 +45,17 @@ export const pregnancyStatusOptions = [
   "POSTPARTUM",
 ] as const;
 
+export const pregnancyTestStatusOptions = [
+  "UNKNOWN",
+  "NOT_APPLICABLE",
+  "NOT_ORDERED",
+  "ORDERED",
+  "PENDING",
+  "NEGATIVE",
+  "POSITIVE",
+  "DECLINED",
+] as const;
+
 export const vulnerabilityIndicatorOptions = [
   "ELDERLY",
   "NEWBORN",
@@ -56,6 +67,36 @@ export const vulnerabilityIndicatorOptions = [
   "MENTAL_HEALTH_RISK",
   "DOMESTIC_VIOLENCE_RISK",
   "CHRONIC_COMPLEXITY",
+] as const;
+
+export const accessReasonOptions = [
+  "Preparing referral",
+  "Care coordination",
+  "Lab follow-up",
+  "Imaging follow-up",
+  "Medication review",
+  "Triage review",
+  "Emergency care",
+  "Patient request",
+  "Other",
+] as const;
+
+export const delegatedInstructionTypeOptions = [
+  "PREPARE_REFERRAL",
+  "ARRANGE_LAB",
+  "ARRANGE_IMAGING",
+  "FOLLOW_UP_CALL",
+  "PATIENT_EDUCATION",
+  "MEDICATION_COUNSELING",
+  "OBSERVE_AND_REPORT",
+  "OTHER",
+] as const;
+
+export const delegatedInstructionPriorityOptions = [
+  "LOW",
+  "ROUTINE",
+  "HIGH",
+  "URGENT",
 ] as const;
 
 export const encounterTypeOptions = [

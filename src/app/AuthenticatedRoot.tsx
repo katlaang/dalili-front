@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { authApi } from "../api/services";
 import { ChangePasswordModal } from "../components/account/ChangePasswordModal";
 import { ActionButton, AppShell, MessageBanner, ThemeToggleButton, useTheme } from "../components/ui";
+import { IS_PATIENT_APP } from "../config/env";
 import { useClientIdleLogout } from "../hooks/useClientIdleLogout";
 import { LoginScreen } from "../screens/auth/LoginScreen";
 import { KioskWorkspaceScreen } from "../screens/kiosk/KioskWorkspaceScreen";
@@ -36,6 +37,22 @@ export function AuthenticatedRoot() {
   useEffect(() => {
     if (actor) setBanner(null);
   }, [actor]);
+
+  useEffect(() => {
+    if (!bootstrapped || !actor) return;
+    const actorAllowed = IS_PATIENT_APP ? actor === "PATIENT" : actor === "STAFF" || actor === "KIOSK";
+    if (actorAllowed) return;
+
+    void (async () => {
+      await signOut();
+      setBanner({
+        text: IS_PATIENT_APP
+          ? "This app is for patient portal access only."
+          : "Patient portal access has been moved to the separate patient app.",
+        tone: "info",
+      });
+    })();
+  }, [actor, bootstrapped, signOut]);
 
   const isIdleLogoutEnabled = actor === "STAFF" || actor === "PATIENT";
 

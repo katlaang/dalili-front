@@ -2,9 +2,9 @@ import { Audio } from "expo-av";
 import React, { useEffect, useRef, useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { encounterApi } from "../../api/services";
-import type { EncounterPreview } from "../../api/types";
+import type { DelegatedInstructionView, EncounterPreview, StaffRecipientView } from "../../api/types";
 import {
-  addendumReasonOptions, addendumTypeOptions, diagnosisTypeOptions,
+  addendumReasonOptions, addendumTypeOptions, delegatedInstructionPriorityOptions, delegatedInstructionTypeOptions, diagnosisTypeOptions,
   dosageFormOptions, encounterTypeOptions, routeOptions,
 } from "../../config/options";
 import {
@@ -146,7 +146,7 @@ function HistoryPanel({ preview, T, scheme }: {
   if (!preview) {
     return (
       <Card title="Patient History">
-        <MessageBanner message="Load a queue ticket to see patient history." tone="info" />
+        <MessageBanner message="Open a queue ticket to see patient history." tone="info" />
       </Card>
     );
   }
@@ -178,6 +178,7 @@ function HistoryPanel({ preview, T, scheme }: {
     isPregnant: triage?.pregnant ?? q?.isPregnant,
     newborn: triage?.newborn,
     elderly: triage?.elderly,
+    manualRedFlag: triage?.manualRedFlag ?? q?.manualRedFlag,
     vulnerabilityIndicators: triage?.vulnerabilityIndicators || q?.vulnerabilityIndicators,
   });
   const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
@@ -405,7 +406,14 @@ export function EncountersScreen({
   const { apiContext, role } = useSession();
   const { theme: T }         = useTheme();
   const { width }            = useWindowDimensions();
-  const isSuperAdmin = role === "SUPER_ADMIN";
+  const normalizedRole = (role || "").toUpperCase();
+  const isSuperAdmin = normalizedRole === "SUPER_ADMIN";
+  const isAdmin = normalizedRole === "ADMIN";
+  const isPhysician = normalizedRole === "PHYSICIAN";
+  const isNurse = normalizedRole === "NURSE";
+  const isReceptionist = normalizedRole === "RECEPTIONIST";
+  const hasPlatformVisibility = isAdmin || isSuperAdmin;
+  const canSeePhysicianNotes = isPhysician || hasPlatformVisibility;
 
   // ── Core ──────────────────────────────────────────────────────────────────
   const [queueTicketId,        setQueueTicketId]        = useState(initialQueueTicketId || "");
@@ -420,6 +428,13 @@ export function EncountersScreen({
   const [addendums,            setAddendums]            = useState<unknown>(null);
   const [historyPanelVisible,  setHistoryPanelVisible]  = useState(true);
   const [alertAcknowledged,    setAlertAcknowledged]    = useState(false);
+  const [nurseRecipients,      setNurseRecipients]      = useState<StaffRecipientView[]>([]);
+  const [delegatedInstructions,setDelegatedInstructions]= useState<DelegatedInstructionView[]>([]);
+  const [selectedNurseId,      setSelectedNurseId]      = useState("");
+  const [instructionType,      setInstructionType]      = useState("PREPARE_REFERRAL");
+  const [instructionPriority,  setInstructionPriority]  = useState("ROUTINE");
+  const [instructionSubject,   setInstructionSubject]   = useState("");
+  const [instructionBody,      setInstructionBody]      = useState("");
 
   // ── Access log / reason modal ─────────────────────────────────────────────
   const [accessModalVisible,   setAccessModalVisible]   = useState(false);
@@ -506,6 +521,21 @@ export function EncountersScreen({
   }, [apiContext, queueTicketId]);
 
   useEffect(() => { setAlertAcknowledged(false); }, [queueTicketId]);
+
+  useEffect(() => {
+    if (!apiContext || !canSeePhysicianNotes) return;
+    encounterApi.getNurseRecipients(apiContext)
+      .then((recipients) => setNurseRecipients(recipients))
+      .catch(() => {});
+  }, [apiContext, canSeePhysicianNotes]);
+
+  useEffect(() => {
+    const id = encounterId.trim();
+    if (!apiContext || !id) return;
+    encounterApi.getDelegatedInstructions(apiContext, id)
+      .then((items) => setDelegatedInstructions(items))
+      .catch(() => setDelegatedInstructions([]));
+  }, [apiContext, encounterId]);
 
   useEffect(() => {
     if (!isListening) { if (timerRef.current) clearInterval(timerRef.current); return; }
@@ -789,6 +819,30 @@ export function EncountersScreen({
     } catch (e) { err(e); }
   };
 
+  const createDelegatedInstruction = async () => {
+    try {
+      const id = encounterId.trim();
+      if (!id) throw new Error("Open or create an encounter before sending instructions.");
+      if (!selectedNurseId.trim()) throw new Error("Select the nurse who should receive this instruction.");
+      if (!instructionSubject.trim()) throw new Error("Instruction subject is required.");
+      if (!instructionBody.trim()) throw new Error("Instruction details are required.");
+
+      const created = await encounterApi.createDelegatedInstruction(apiContext, id, {
+        recipientUserId: selectedNurseId,
+        instructionType,
+        subject: instructionSubject.trim(),
+        body: instructionBody.trim(),
+        patientId: preview?.patient?.patientId || q?.patientId || null,
+        priority: instructionPriority || null,
+      });
+
+      setDelegatedInstructions(prev => [created, ...prev.filter(item => item.id !== created.id)]);
+      setInstructionSubject("");
+      setInstructionBody("");
+      ok("Instruction sent to selected nurse");
+    } catch (e) { err(e); }
+  };
+
   // ── Derived values ────────────────────────────────────────────────────────
   const vitalTrendAlert = (() => {
     if (!preview?.vitalTrends || preview.vitalTrends.length < 2) return null;
@@ -803,16 +857,28 @@ export function EncountersScreen({
   const q          = preview?.queue  as Record<string, any> | null;
   const patientMrn = (preview?.patient as any)?.mrn || null;
 
-  const AI_FIELDS = new Set(["aiAccuracyRating","transcriptAccuracyScore","transcriptDiscrepancySummary","aiCorrectionComments","noteConfirmedBy","noteConfirmedAt","noteConfirmed"]);
+  const RESTRICTED_FIELDS = new Set([
+    "aiAccuracyRating",
+    "transcriptAccuracyScore",
+    "transcriptDiscrepancySummary",
+    "aiCorrectionComments",
+    "noteConfirmedBy",
+    "noteConfirmedAt",
+    "noteConfirmed",
+    "physicianAuthoredNote",
+    "finalNote",
+    "draftNote",
+    "correctionComments",
+  ]);
   const scrubAiFields = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(scrubAiFields);
     if (!v || typeof v !== "object") return v;
     return Object.fromEntries(Object.entries(v as Record<string, unknown>)
-      .filter(([k]) => !AI_FIELDS.has(k))
+      .filter(([k]) => canSeePhysicianNotes || !RESTRICTED_FIELDS.has(k))
       .map(([k, val]) => [k, scrubAiFields(val)]));
   };
 
-  const encounterPanelData = isSuperAdmin ? encounter : scrubAiFields(encounter);
+  const encounterPanelData = hasPlatformVisibility ? encounter : scrubAiFields(encounter);
 
   const apptInfo = q?.appointmentId ? {
     time: formatTime(q.appointmentScheduledAt),
@@ -859,12 +925,12 @@ export function EncountersScreen({
           </View>
         ) : null}
 
-        {/* Create & Load */}
-        <Card title="Create & Load">
+        {/* Create & Open */}
+        <Card title="Create & Open">
           <InputField label="Queue Ticket UUID" value={queueTicketId} onChangeText={setQueueTicketId} />
           <ChoiceChips label="Encounter Type" options={encounterTypeOptions} value={encounterType} onChange={setEncounterType} />
           <InlineActions>
-            <ActionButton label="Load Patient History" onPress={loadPreview} />
+            <ActionButton label="Patient History" onPress={loadPreview} />
             <ActionButton label="Create from Queue"   onPress={createFromQueue} variant="secondary" />
             <ActionButton
               label={historyPanelVisible ? "Hide History" : "Show History"}
@@ -894,7 +960,7 @@ export function EncountersScreen({
           <InputField label="Encounter UUID" value={encounterId} onChangeText={setEncounterId} />
           <InlineActions>
             {/* Completed encounters trigger the access-reason modal before loading */}
-            <ActionButton label="Load Encounter"     onPress={loadEncounter} />
+            <ActionButton label="Open Encounter"     onPress={loadEncounter} />
             <ActionButton label="My Open Encounters" onPress={loadMyOpen} variant="secondary" />
           </InlineActions>
           <MessageBanner message={message} tone={tone} />
@@ -905,6 +971,8 @@ export function EncountersScreen({
           <HistoryPanel preview={preview} T={T as any} scheme={T.scheme} />
         ) : null}
 
+        {canSeePhysicianNotes ? (
+          <>
         {/* Documentation */}
         <Card title="Documentation">
           <InputField label="Ambient Language (ISO)" value={ambientLanguage} onChangeText={setAmbientLanguage} placeholder="en" />
@@ -916,7 +984,7 @@ export function EncountersScreen({
             />
             <ActionButton label="Stop & Transcribe" onPress={() => stopAmbient()} variant="danger" disabled={!isListening} />
           </InlineActions>
-          {ambientResult ? <JsonPanel value={ambientResult} /> : null}
+          {isSuperAdmin && ambientResult ? <JsonPanel value={ambientResult} /> : null}
 
           <InputField label="Transcript" value={transcript} onChangeText={setTranscript} multiline />
           <InlineActions>
@@ -943,7 +1011,7 @@ export function EncountersScreen({
               } catch (e) { err(e); }
             }} />
           </InlineActions>
-          {generatedDraft ? <JsonPanel value={generatedDraft} /> : null}
+          {isSuperAdmin && generatedDraft ? <JsonPanel value={generatedDraft} /> : null}
 
           <InputField label="Physician Note" value={physicianNote} onChangeText={setPhysicianNote} multiline />
           <InlineActions>
@@ -961,6 +1029,94 @@ export function EncountersScreen({
               catch (e) { err(e); }
             }} />
           </InlineActions>
+        </Card>
+
+        <Card title="Doctor Instructions for Nurse">
+          <MessageBanner
+            message="Doctors can send nurse-safe follow-up tasks here without exposing physician-authored notes."
+            tone="info"
+          />
+          <Text style={{ color: T.textMid, fontSize: 12 }}>
+            Linked patient: {preview?.patient?.fullName || q?.patientName || "No patient selected"}
+          </Text>
+          <View style={es.recipientWrap}>
+            {nurseRecipients.length > 0 ? nurseRecipients.map((recipient) => {
+              const active = recipient.id === selectedNurseId;
+              const label = recipient.fullName || recipient.username || recipient.employeeId || recipient.id;
+              const subtitle = [recipient.role, recipient.employeeId].filter(Boolean).join(" · ");
+              return (
+                <Pressable
+                  key={recipient.id}
+                  onPress={() => setSelectedNurseId(recipient.id)}
+                  style={[
+                    es.recipientChip,
+                    {
+                      borderColor: active ? T.teal : T.border,
+                      backgroundColor: active ? T.tealGlow : T.surfaceAlt as string,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: active ? T.teal : T.text, fontSize: 13, fontWeight: "700" }}>{label}</Text>
+                  {subtitle ? (
+                    <Text style={{ color: T.textMid, fontSize: 11 }}>{subtitle}</Text>
+                  ) : null}
+                </Pressable>
+              );
+            }) : (
+              <MessageBanner message="No nurse recipients available yet." tone="info" />
+            )}
+          </View>
+          <ChoiceChips
+            label="Instruction Type"
+            options={delegatedInstructionTypeOptions}
+            value={instructionType}
+            onChange={setInstructionType}
+          />
+          <ChoiceChips
+            label="Priority"
+            options={delegatedInstructionPriorityOptions}
+            value={instructionPriority}
+            onChange={setInstructionPriority}
+          />
+          <InputField label="Subject" value={instructionSubject} onChangeText={setInstructionSubject} placeholder="Short task summary" />
+          <InputField label="Instruction Body" value={instructionBody} onChangeText={setInstructionBody} multiline placeholder="Explain what the assigned nurse should do." />
+          <InlineActions>
+            <ActionButton label="Send to Selected Nurse" onPress={createDelegatedInstruction} />
+            <ActionButton
+              label="Refresh Instructions"
+              onPress={async () => {
+                try {
+                  const id = encounterId.trim();
+                  if (!id) throw new Error("Encounter must be open before refreshing instructions.");
+                  setDelegatedInstructions(await encounterApi.getDelegatedInstructions(apiContext, id));
+                  ok("Instructions refreshed");
+                } catch (e) { err(e); }
+              }}
+              variant="secondary"
+            />
+          </InlineActions>
+          {delegatedInstructions.length > 0 ? (
+            <View style={{ gap: 10 }}>
+              {delegatedInstructions.map((instruction) => (
+                <View
+                  key={instruction.id}
+                  style={[
+                    es.infoBox,
+                    { backgroundColor: T.surfaceAlt as string, borderColor: T.borderLight },
+                  ]}
+                >
+                  <Text style={{ color: T.text, fontSize: 15, fontWeight: "800" }}>{instruction.subject}</Text>
+                  <Text style={{ color: T.textMid, fontSize: 12 }}>
+                    {instruction.recipientName || "Assigned nurse"} · {instruction.instructionType.replace(/_/g, " ")}{instruction.priority ? ` · ${instruction.priority}` : ""}
+                  </Text>
+                  <Text style={{ color: T.text, fontSize: 13, lineHeight: 20 }}>{instruction.body}</Text>
+                  <Text style={{ color: T.textMuted, fontSize: 11 }}>
+                    Sent {formatDateTime(instruction.createdAt ?? undefined)} by {instruction.createdByName || "Doctor"}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </Card>
 
         {/* Diagnosis & Medication */}
@@ -1090,7 +1246,7 @@ export function EncountersScreen({
                         ok("Addendum created");
                       } catch (e) { err(e); }
                     }} />
-                    <ActionButton label="Load Addendums" variant="ghost" onPress={async () => {
+                    <ActionButton label="View Addendums" variant="ghost" onPress={async () => {
                       try { setAddendums(await encounterApi.listAddendums(apiContext, encounterId.trim())); ok("Addendums loaded"); }
                       catch (e) { err(e); }
                     }} />
@@ -1098,7 +1254,7 @@ export function EncountersScreen({
                 </>
               ) : (
                 <InlineActions>
-                  <ActionButton label="Load Addendums" variant="ghost" onPress={async () => {
+                  <ActionButton label="View Addendums" variant="ghost" onPress={async () => {
                     try { setAddendums(await encounterApi.listAddendums(apiContext, encounterId.trim())); ok("Addendums loaded"); }
                     catch (e) { err(e); }
                   }} />
@@ -1113,6 +1269,16 @@ export function EncountersScreen({
         </Card>
 
         {/* Session access log — shown when completed encounters were opened */}
+          </>
+        ) : (
+          <Card title="Clinician Handoff">
+            <MessageBanner
+              message="Only the treating doctor can write or review physician notes here. Nurses and receptionists receive separate delegated instructions instead."
+              tone="info"
+            />
+          </Card>
+        )}
+
         {accessLog.length > 0 ? (
           <Card title="Access Log (this session)">
             {accessLog.map((entry, i) => (
@@ -1124,13 +1290,23 @@ export function EncountersScreen({
           </Card>
         ) : null}
 
-        {encounter ? <Card title="Encounter"><JsonPanel value={encounterPanelData} /></Card> : null}
-        {myOpen    ? <Card title="My Open Encounters"><JsonPanel value={isSuperAdmin ? myOpen : scrubAiFields(myOpen)} /></Card> : null}
-        {readiness ? <Card title="Readiness"><JsonPanel value={readiness} /></Card> : null}
-        {addendums ? <Card title="Addendums"><JsonPanel value={addendums} /></Card> : null}
+        {encounter && !hasPlatformVisibility ? (
+          <Card title="Encounter Status">
+            <Text style={{ color: T.text, fontSize: 14, fontWeight: "700" }}>
+              {(encounter as any)?.status || "Encounter active"}
+            </Text>
+            <Text style={{ color: T.textMid, fontSize: 12 }}>
+              {preview?.patient?.fullName || q?.patientName || "Patient"} · {preview?.patient?.mrn || q?.patientId || "Unknown patient ID"}
+            </Text>
+          </Card>
+        ) : null}
+        {hasPlatformVisibility && encounter ? <Card title="Encounter"><JsonPanel value={encounterPanelData} /></Card> : null}
+        {hasPlatformVisibility && myOpen ? <Card title="My Open Encounters"><JsonPanel value={myOpen} /></Card> : null}
+        {hasPlatformVisibility && readiness ? <Card title="Readiness"><JsonPanel value={readiness} /></Card> : null}
+        {hasPlatformVisibility && addendums ? <Card title="Addendums"><JsonPanel value={addendums} /></Card> : null}
 
-        {isSuperAdmin && encounter && typeof encounter === "object" ? (
-          <Card title="AI Comparison Audit (Super Admin)">
+        {hasPlatformVisibility && encounter && typeof encounter === "object" ? (
+          <Card title={isSuperAdmin ? "AI Comparison Audit (Super Admin)" : "AI Comparison Audit (Admin)"}>
             <JsonPanel value={{
               noteConfirmed: (encounter as any).noteConfirmed,
               aiAccuracyRating: (encounter as any).aiAccuracyRating,
@@ -1175,6 +1351,8 @@ const es = StyleSheet.create({
   vulnerabilityWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   vulnerabilityBadge:{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, borderWidth: 1 },
   vulnerabilityBadgeText: { fontSize: 10, fontWeight: "700" },
+  recipientWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  recipientChip: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, minWidth: 180, gap: 3 },
   vitalsGrid:        { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   vitalCard:         { width: "30%", minWidth: 80, borderWidth: 1, borderRadius: 10, padding: 10, gap: 4 },
   vitalLabel:        { fontSize: 10, fontWeight: "700" },

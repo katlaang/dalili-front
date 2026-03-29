@@ -29,7 +29,7 @@ const DOB_PLACEHOLDER = "MM/DD/YYYY";
 function SatinBackground() {
   if (typeof document === "undefined") return null;
   return (
-    <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFillObject, { pointerEvents: "none" }]}>
       {/* @ts-ignore */}
       <svg width="100%" height="100%" viewBox="0 0 1440 900"
         preserveAspectRatio="xMidYMid slice"

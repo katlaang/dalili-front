@@ -6,6 +6,7 @@ export interface CheckInDeepLinkPrefill {
   complaint?: string;
   consentForDataAccess?: boolean;
   source?: string;
+  kioskLabel?: string;
   rawUrl: string;
   receivedAt: number;
 }
@@ -50,12 +51,18 @@ const parseCheckInDeepLink = (urlText: string | null): CheckInDeepLinkPrefill | 
     const complaint = url.searchParams.get("complaint") || undefined;
     const consent = parseBoolean(url.searchParams.get("consent"));
     const source = url.searchParams.get("source") || "qr";
+    const kioskLabel =
+      url.searchParams.get("kiosk") ||
+      url.searchParams.get("kioskLabel") ||
+      url.searchParams.get("location") ||
+      undefined;
 
     return {
       category,
       complaint,
       consentForDataAccess: consent,
       source,
+      kioskLabel,
       rawUrl: urlText,
       receivedAt: Date.now()
     };

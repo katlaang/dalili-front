@@ -11,6 +11,7 @@ import {
   View,
   ViewStyle,
 } from "react-native";
+import { accessReasonOptions } from "../../config/options";
 import { typography } from "../../constants/theme";
 
 // ─── THEME SYSTEM ─────────────────────────────────────────────────────────────
@@ -129,7 +130,7 @@ function WatermarkBg({ scheme }: { scheme: ColorScheme }) {
   const teal   = scheme === "dark" ? "#2DD4BF" : "#0d9488";
   const waveOp = scheme === "dark" ? 0.14 : 0.08;
   return (
-    <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFillObject, { pointerEvents: "none" }]}>
       {/* @ts-ignore */}
       <svg width="100%" height="100%" viewBox="0 0 1440 900"
         preserveAspectRatio="xMidYMid slice"
@@ -361,6 +362,96 @@ export function JsonPanel({ value }: { value: unknown }) {
   );
 }
 
+export function AccessReasonModal({
+  visible,
+  title = "Open Medical Record",
+  patientLabel,
+  resourceLabel,
+  confirmLabel = "Continue",
+  onCancel,
+  onConfirm,
+}: {
+  visible: boolean;
+  title?: string;
+  patientLabel?: string;
+  resourceLabel?: string;
+  confirmLabel?: string;
+  onCancel: () => void;
+  onConfirm: (payload: { reason: string; detail?: string }) => void;
+}) {
+  const { theme: T } = useTheme();
+  const [selectedReason, setSelectedReason] = useState<string>(accessReasonOptions[0]);
+  const [detail, setDetail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!visible) {
+      setSelectedReason(accessReasonOptions[0]);
+      setDetail("");
+      setError(null);
+    }
+  }, [visible]);
+
+  const handleConfirm = () => {
+    const cleanDetail = detail.trim();
+    const reason = selectedReason === "Other"
+      ? cleanDetail
+      : cleanDetail
+        ? `${selectedReason}: ${cleanDetail}`
+        : selectedReason;
+
+    if (!reason) {
+      setError("Select a reason or provide a short note.");
+      return;
+    }
+
+    if (selectedReason === "Other" && !cleanDetail) {
+      setError("Enter the access reason.");
+      return;
+    }
+
+    setError(null);
+    onConfirm({ reason, detail: cleanDetail || undefined });
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={ui.modalOverlay}>
+        <View style={[ui.modalCard, { backgroundColor: T.surface, borderColor: T.border }]}>
+          <Text style={[ui.modalTitle, { color: T.text }]}>{title}</Text>
+          <Text style={[ui.modalBody, { color: T.textMid }]}>
+            Access to protected patient data is logged.
+          </Text>
+          {patientLabel ? (
+            <Text style={[ui.modalMeta, { color: T.text }]}>Patient: {patientLabel}</Text>
+          ) : null}
+          {resourceLabel ? (
+            <Text style={[ui.modalMeta, { color: T.text }]}>Area: {resourceLabel}</Text>
+          ) : null}
+          <ChoiceChips
+            label="Reason"
+            options={accessReasonOptions}
+            value={selectedReason}
+            onChange={setSelectedReason}
+          />
+          <InputField
+            label={selectedReason === "Other" ? "Reason Detail" : "Additional Detail (optional)"}
+            value={detail}
+            onChangeText={setDetail}
+            multiline
+            placeholder={selectedReason === "Other" ? "Describe why you are opening this record." : "Add context if needed."}
+          />
+          <MessageBanner message={error} tone="error" />
+          <InlineActions>
+            <ActionButton label={confirmLabel} onPress={handleConfirm} />
+            <ActionButton label="Cancel" onPress={onCancel} variant="ghost" />
+          </InlineActions>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const ui = StyleSheet.create({
   page:           { flex: 1 },
@@ -395,4 +486,9 @@ const ui = StyleSheet.create({
   jsonText:       { color: "#a8d4ea", fontFamily: "Courier New", fontSize: 12 },
   themeBtn:       { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, borderWidth: 1.5 },
   themeBtnText:   { fontSize: 12, fontWeight: "600" },
+  modalOverlay:   { flex: 1, justifyContent: "center", alignItems: "center", padding: 16, backgroundColor: "rgba(7,18,32,0.66)" },
+  modalCard:      { width: "100%", maxWidth: 520, borderWidth: 1, borderRadius: 16, padding: 16, gap: 12 },
+  modalTitle:     { fontSize: 20, fontFamily: typography.headingFamily },
+  modalBody:      { fontSize: 13, lineHeight: 20, fontFamily: typography.bodyFamily },
+  modalMeta:      { fontSize: 13, fontWeight: "600", fontFamily: typography.bodyFamily },
 });

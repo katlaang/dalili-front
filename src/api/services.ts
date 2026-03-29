@@ -15,6 +15,8 @@ import type {
   CarePlanSuggestionResult,
   ContraindicationResponse,
   CurrentUserProfile,
+  ChartAccessLogEntry,
+  ChartAccessLogResponse,
   EncounterAccessLogEntry,
   EncounterPreview,
   EncounterNoteView,
@@ -26,6 +28,8 @@ import type {
   LabResultView,
   KioskCheckInResponse,
   LoginResponse,
+  MessageThreadDetail,
+  MessageThreadSummary,
   PortalMessageView,
   PatientPortalEncounter,
   PatientPortalMedication,
@@ -41,7 +45,9 @@ import type {
   TransferRequestView,
   TriageOutcomeResult,
   TriageAssessment,
-  AuthorizationView
+  AuthorizationView,
+  DelegatedInstructionView,
+  StaffRecipientView,
 } from "./types";
 
 type UploadAudioPart = Blob | { uri: string; name: string; type: string };
@@ -60,6 +66,29 @@ async function parseUnknownResponse(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+async function requestWithFallback<T>(
+  ctx: ApiContext,
+  attempts: Array<{ path: string; body?: Record<string, unknown> }>
+) {
+  let lastError: unknown;
+
+  for (const attempt of attempts) {
+    try {
+      return await authedRequest<T>(ctx, attempt.path, {
+        method: "POST",
+        body: attempt.body,
+      });
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof ApiError) || ![400, 404, 405].includes(error.status)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 export const authApi = {
@@ -309,6 +338,12 @@ export const patientPortalApi = {
   getMessages: (ctx: ApiContext) =>
     authedRequest<PortalMessageView[]>(ctx, "/api/patient/portal/messages"),
 
+  getMessageThreads: (ctx: ApiContext) =>
+    authedRequest<MessageThreadSummary[]>(ctx, "/api/patient/portal/messages/threads"),
+
+  getMessageThread: (ctx: ApiContext, threadId: string) =>
+    authedRequest<MessageThreadDetail>(ctx, `/api/patient/portal/messages/threads/${threadId}`),
+
   sendMessage: (
     ctx: ApiContext,
     payload: {
@@ -323,6 +358,41 @@ export const patientPortalApi = {
     }
   ) =>
     authedRequest<PortalMessageView>(ctx, "/api/patient/portal/messages", {
+      method: "POST",
+      body: payload
+    }),
+
+  createMessageThread: (
+    ctx: ApiContext,
+    payload: {
+      category?: string;
+      subject?: string;
+      body: string;
+      targetStaffId?: string;
+      linkedEncounterId?: string;
+      linkedMedicationOrderId?: string;
+      linkedLabResultId?: string;
+      linkedReferralId?: string;
+    }
+  ) =>
+    authedRequest<MessageThreadDetail>(ctx, "/api/patient/portal/messages/threads", {
+      method: "POST",
+      body: payload
+    }),
+
+  replyToThread: (
+    ctx: ApiContext,
+    threadId: string,
+    payload: {
+      body: string;
+      category?: string;
+      linkedEncounterId?: string;
+      linkedMedicationOrderId?: string;
+      linkedLabResultId?: string;
+      linkedReferralId?: string;
+    }
+  ) =>
+    authedRequest<MessageThreadDetail>(ctx, `/api/patient/portal/messages/threads/${threadId}/reply`, {
       method: "POST",
       body: payload
     }),
@@ -364,7 +434,10 @@ export const patientPortalApi = {
     }),
 
   getAuthorizations: (ctx: ApiContext) =>
-    authedRequest<AuthorizationView[]>(ctx, "/api/patient/portal/authorizations")
+    authedRequest<AuthorizationView[]>(ctx, "/api/patient/portal/authorizations"),
+
+  getAccessHistory: (ctx: ApiContext) =>
+    authedRequest<ChartAccessLogResponse>(ctx, "/api/patient/portal/access-log")
 };
 
 export const patientAppointmentApi = {
@@ -487,6 +560,63 @@ export const queueApi = {
     authedRequest<QueueTicket>(ctx, `/api/queue/${ticketId}/return-to-waiting`, {
       method: "POST"
     }),
+
+  holdForPregnancyTest: (
+    ctx: ApiContext,
+    ticketId: string,
+    payload?: {
+      assessmentId?: string | null;
+      reason?: string | null;
+      notes?: string | null;
+    }
+  ) =>
+    requestWithFallback<QueueTicket>(ctx, [
+      {
+        path: `/api/queue/${ticketId}/hold/pregnancy-test`,
+        body: payload ?? {},
+      },
+      {
+        path: `/api/queue/${ticketId}/hold/ancillary`,
+        body: {
+          ancillaryStepCode: "PREGNANCY_TEST",
+          ancillaryStepLabel: "Pregnancy Test",
+          ...payload,
+        },
+      },
+      {
+        path: `/api/queue/${ticketId}/waiting-for-pregnancy-test`,
+        body: payload ?? {},
+      },
+    ]),
+
+  resumeAncillaryHold: (
+    ctx: ApiContext,
+    ticketId: string,
+    payload?: {
+      ancillaryStepCode?: string | null;
+      notes?: string | null;
+    }
+  ) =>
+    requestWithFallback<QueueTicket>(ctx, [
+      {
+        path: `/api/queue/${ticketId}/resume/pregnancy-test`,
+        body: payload ?? {},
+      },
+      {
+        path: `/api/queue/${ticketId}/resume/ancillary`,
+        body: {
+          ancillaryStepCode: payload?.ancillaryStepCode ?? "PREGNANCY_TEST",
+          notes: payload?.notes ?? null,
+        },
+      },
+      {
+        path: `/api/queue/${ticketId}/resume`,
+        body: {
+          ancillaryStepCode: payload?.ancillaryStepCode ?? "PREGNANCY_TEST",
+          notes: payload?.notes ?? null,
+        },
+      },
+    ]),
 
   completeTicket: (ctx: ApiContext, ticketId: string) =>
     authedRequest<QueueTicket>(ctx, `/api/queue/${ticketId}/complete`, {
@@ -643,6 +773,32 @@ export const encounterApi = {
 
     throw lastError;
   },
+
+  getDelegatedInstructions: (ctx: ApiContext, encounterId: string) =>
+    authedRequest<DelegatedInstructionView[]>(ctx, `/api/encounters/${encounterId}/delegated-instructions`),
+
+  getNurseRecipients: (ctx: ApiContext) =>
+    authedRequest<StaffRecipientView[]>(ctx, "/api/encounters/nurse-recipients"),
+
+  createDelegatedInstruction: (
+    ctx: ApiContext,
+    encounterId: string,
+    payload: {
+      recipientUserId: string;
+      instructionType: string;
+      subject: string;
+      body: string;
+      patientId?: string | null;
+      linkedReferralId?: string | null;
+      linkedLabResultId?: string | null;
+      linkedImagingOrderId?: string | null;
+      priority?: string | null;
+    }
+  ) =>
+    authedRequest<DelegatedInstructionView>(ctx, `/api/encounters/${encounterId}/delegated-instructions`, {
+      method: "POST",
+      body: payload
+    }),
 
   recordTranscript: (ctx: ApiContext, encounterId: string, transcript: string) =>
     authedRequest<EncounterResponse>(ctx, `/api/encounters/${encounterId}/transcript`, {
@@ -807,6 +963,58 @@ export const encounterApi = {
 };
 
 export const clinicalPortalApi = {
+  recordChartAccess: async (
+    ctx: ApiContext,
+    patientId: string,
+    payload: {
+      reason: string;
+      detail?: string | null;
+      viewedArea?: string | null;
+      viewedResource?: string | null;
+      accessScope?: string | null;
+    }
+  ) => {
+    const attempts: Array<{ path: string; body: Record<string, unknown> }> = [
+      {
+        path: `/api/clinical/patient-data/${patientId}/access-log`,
+        body: {
+          reason: payload.reason,
+          detail: payload.detail ?? null,
+          viewedArea: payload.viewedArea ?? null,
+          viewedResource: payload.viewedResource ?? null,
+          accessScope: payload.accessScope ?? null,
+        },
+      },
+      {
+        path: `/api/clinical/patient-data/${patientId}/access`,
+        body: {
+          accessReason: payload.reason,
+          detail: payload.detail ?? null,
+          viewedArea: payload.viewedArea ?? null,
+          viewedResource: payload.viewedResource ?? null,
+          accessScope: payload.accessScope ?? null,
+        },
+      },
+    ];
+
+    let lastError: unknown;
+    for (const attempt of attempts) {
+      try {
+        return await authedRequest<ChartAccessLogEntry>(ctx, attempt.path, {
+          method: "POST",
+          body: attempt.body,
+        });
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof ApiError) || ![400, 404].includes(error.status)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError;
+  },
+
   getScope: (ctx: ApiContext, patientId: string) =>
     authedRequest<AccessResolution>(ctx, `/api/clinical/patient-data/${patientId}/scope`),
 
@@ -865,6 +1073,17 @@ export const clinicalPortalApi = {
         : "/api/clinical/patient-data/messages/inbox"
     ),
 
+  getMessageThreads: (ctx: ApiContext, patientId?: string) =>
+    authedRequest<MessageThreadSummary[]>(
+      ctx,
+      patientId
+        ? `/api/clinical/patient-data/messages/threads?patientId=${encodeURIComponent(patientId)}`
+        : "/api/clinical/patient-data/messages/threads"
+    ),
+
+  getMessageThread: (ctx: ApiContext, threadId: string) =>
+    authedRequest<MessageThreadDetail>(ctx, `/api/clinical/patient-data/messages/threads/${threadId}`),
+
   markMessageRead: (ctx: ApiContext, messageId: string) =>
     authedRequest<PortalMessageView>(ctx, `/api/clinical/patient-data/messages/${messageId}/read`, {
       method: "POST"
@@ -884,6 +1103,44 @@ export const clinicalPortalApi = {
     }
   ) =>
     authedRequest<PortalMessageView>(ctx, `/api/clinical/patient-data/${patientId}/messages`, {
+      method: "POST",
+      body: payload
+    }),
+
+  createMessageThread: (
+    ctx: ApiContext,
+    patientId: string,
+    payload: {
+      category?: string;
+      subject?: string;
+      body: string;
+      linkedEncounterId?: string;
+      linkedMedicationOrderId?: string;
+      linkedLabResultId?: string;
+      linkedReferralId?: string;
+    }
+  ) =>
+    authedRequest<MessageThreadDetail>(ctx, "/api/clinical/patient-data/messages/threads", {
+      method: "POST",
+      body: {
+        patientId,
+        ...payload,
+      }
+    }),
+
+  replyToThread: (
+    ctx: ApiContext,
+    threadId: string,
+    payload: {
+      body: string;
+      category?: string;
+      linkedEncounterId?: string;
+      linkedMedicationOrderId?: string;
+      linkedLabResultId?: string;
+      linkedReferralId?: string;
+    }
+  ) =>
+    authedRequest<MessageThreadDetail>(ctx, `/api/clinical/patient-data/messages/threads/${threadId}/reply`, {
       method: "POST",
       body: payload
     }),

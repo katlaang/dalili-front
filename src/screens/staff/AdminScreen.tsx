@@ -148,7 +148,7 @@ export function AdminScreen() {
     <>
       <Card title="Admin Portal">
         <MessageBanner
-          message="Create staff, consultant, and patient accounts from this portal."
+          message="Create staff and consultant accounts here. Patient portal profiles are only created for existing patients after their first visit."
           tone="info"
         />
       </Card>
@@ -178,10 +178,14 @@ export function AdminScreen() {
         {profileType === "PATIENT" ? (
           <>
             <InputField
-              label="Patient UUID"
+              label="Existing Patient Record ID"
               value={patientProfileId}
               onChangeText={setPatientProfileId}
-              placeholder="Paste existing patient UUID"
+              placeholder="Enter the existing patient record ID"
+            />
+            <MessageBanner
+              message="Do not create patient portal access until the patient has already been registered during a real visit."
+              tone="info"
             />
             <InlineActions>
               <ActionButton label="Create Patient Portal Profile" onPress={registerPatientPortalUser} />

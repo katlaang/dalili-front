@@ -5,9 +5,11 @@ import type {
   AppointmentCheckInResponse,
   AppointmentView,
   AuthorizationView,
+  ChartAccessLogEntry,
   EncounterNoteView,
   LabResultView,
   PatientPortalEncounter,
+  PatientPortalQueueTicket,
   ReferralView,
 } from "../../api/types";
 import {
@@ -23,6 +25,7 @@ import {
 import { useSession } from "../../state/session";
 import { toErrorMessage } from "../../utils/format";
 import type { CheckInDeepLinkPrefill } from "../../hooks/useCheckInDeepLink";
+import { PatientMessagesScreen } from "./PatientMessagesScreen";
 
 // ─── PATIENT WORKSPACE ────────────────────────────────────────────────────────
 // Tabs: Appointments · Labs · Diagnosis · Access Log · Visit Notes · Imaging · Physiotherapy
@@ -39,7 +42,7 @@ interface PatientWorkspaceScreenProps {
 
 const PORTAL_TABS = [
   "Appointments", "Labs", "Diagnosis",
-  "Access Log", "Visit Notes", "Imaging", "Physiotherapy",
+  "Access Log", "Messages", "Visit Notes", "Imaging", "Physiotherapy",
 ] as const;
 type PortalTab = (typeof PORTAL_TABS)[number];
 
@@ -111,12 +114,15 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
   const [notes,         setNotes]         = useState<EncounterNoteView[]>([]);
   const [encounters,    setEncounters]    = useState<PatientPortalEncounter[]>([]);
   const [authorizations,setAuthorizations]= useState<AuthorizationView[]>([]);
+  const [accessHistory, setAccessHistory] = useState<ChartAccessLogEntry[]>([]);
+  const [accessHistoryUnavailable, setAccessHistoryUnavailable] = useState(false);
 
   const [pendingAppts,  setPendingAppts]  = useState<AppointmentView[]>([]);
   const [selectedApptId,setSelectedApptId]= useState("");
   const [complaint,     setComplaint]     = useState("");
   const [consent,       setConsent]       = useState(true);
   const [checkInResp,   setCheckInResp]   = useState<AppointmentCheckInResponse | null>(null);
+  const [qrQueueTicket, setQrQueueTicket] = useState<PatientPortalQueueTicket | null>(null);
 
   const [selectedTest,  setSelectedTest]  = useState("");
   const [selectedDate,  setSelectedDate]  = useState("");
@@ -131,6 +137,7 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
     if (!deepLinkCheckInPrefill) return;
     if (deepLinkCheckInPrefill.complaint != null) setComplaint(deepLinkCheckInPrefill.complaint);
     if (deepLinkCheckInPrefill.consentForDataAccess != null) setConsent(deepLinkCheckInPrefill.consentForDataAccess);
+    setActiveTab("Appointments");
   }, [deepLinkCheckInPrefill?.receivedAt]);
 
   if (!apiContext) {
@@ -139,15 +146,18 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
 
   const loadAllData = async () => {
     try {
-      const [labsD, refD, notesD, encD, authD] = await Promise.all([
+      const [labsD, refD, notesD, encD, authD, accessD] = await Promise.all([
         patientPortalApi.getLabs(apiContext),
         patientPortalApi.getReferrals(apiContext),
         patientPortalApi.getNotes(apiContext),
         patientPortalApi.getEncounters(apiContext),
         patientPortalApi.getAuthorizations(apiContext),
+        patientPortalApi.getAccessHistory(apiContext).catch(() => null),
       ]);
       setLabs(labsD); setReferrals(refD); setNotes(notesD);
       setEncounters(encD); setAuthorizations(authD);
+      setAccessHistory(accessD?.entries || []);
+      setAccessHistoryUnavailable(!accessD);
       ok("Portal data refreshed");
     } catch (e) { err(e); }
   };
@@ -163,7 +173,7 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
 
   const confirmAppointment = async () => {
     try {
-      if (!selectedApptId.trim()) throw new Error("Appointment ID required");
+      if (!selectedApptId.trim()) throw new Error("Select an upcoming appointment first.");
       const r = await patientAppointmentApi.checkIn(apiContext, selectedApptId.trim(), {
         complaint: complaint.trim() || undefined,
         consentForDataAccess: consent,
@@ -171,6 +181,21 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
       setCheckInResp(r);
       ok(`Queue number: ${r.queueTicket.ticketNumber}`);
       await loadPending();
+    } catch (e) { err(e); }
+  };
+
+  const confirmQrCheckIn = async () => {
+    try {
+      if (!deepLinkCheckInPrefill?.category) {
+        throw new Error("This QR code does not contain a valid kiosk check-in category.");
+      }
+      const ticket = await patientPortalApi.checkIn(apiContext, {
+        category: deepLinkCheckInPrefill.category,
+        complaint: complaint.trim() || deepLinkCheckInPrefill.complaint || undefined,
+        consentForDataAccess: consent,
+      });
+      setQrQueueTicket(ticket);
+      ok(`Queue number: ${ticket.ticketNumber}`);
     } catch (e) { err(e); }
   };
 
@@ -245,11 +270,28 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
       {/* ── APPOINTMENTS ── */}
       {activeTab === "Appointments" ? (
         <Card title="Confirm Appointment">
-          <InputField label="Selected Appointment ID" value={selectedApptId} onChangeText={setSelectedApptId} />
+          {deepLinkCheckInPrefill?.source === "qr" ? (
+            <View style={[rowStyle, { borderColor: T.teal + "60", backgroundColor: T.teal + "11" }]}>
+              <Text style={[{ fontWeight: "800", color: T.teal, fontSize: 14 }]}>Kiosk QR Ready</Text>
+              <Text style={labelStyle}>Check-In Type</Text>
+              <Text style={valueStyle}>{deepLinkCheckInPrefill.category || "General queue check-in"}</Text>
+              <Text style={labelStyle}>Kiosk</Text>
+              <Text style={valueStyle}>{deepLinkCheckInPrefill.kioskLabel || "Scanned kiosk QR"}</Text>
+              <Text style={labelStyle}>Complaint</Text>
+              <Text style={valueStyle}>{deepLinkCheckInPrefill.complaint || complaint || "Not provided"}</Text>
+              <InlineActions>
+                <ActionButton label="Get Queue Number from QR" onPress={confirmQrCheckIn} />
+              </InlineActions>
+              <MessageBanner
+                message="Only existing signed-in patients can use kiosk QR check-in. First-visit registration still has to be completed by staff."
+                tone="info"
+              />
+            </View>
+          ) : null}
           <InputField label="Complaint (optional)" value={complaint} onChangeText={setComplaint} multiline />
           <ToggleField label="Consent for same-hospital historical data access" value={consent} onChange={setConsent} />
           <InlineActions>
-            <ActionButton label="Load Pending"        onPress={loadPending}          variant="secondary" />
+            <ActionButton label="View Upcoming Appointments" onPress={loadPending} variant="secondary" />
             <ActionButton label="Confirm Appointment" onPress={confirmAppointment} />
           </InlineActions>
 
@@ -262,12 +304,14 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
                   }]}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                     <Text style={[{ fontWeight: "800", color: T.text, fontSize: 14 }]}>
-                      {appt.appointmentNumber || appt.id.slice(0, 8)}
+                      {appt.appointmentNumber || "Scheduled appointment"}
                     </Text>
                     <View style={[pw.statusChip, { backgroundColor: T.teal + "22", borderColor: T.teal + "60" }]}>
                       <Text style={{ color: T.teal, fontSize: 11, fontWeight: "700" }}>{appt.status}</Text>
                     </View>
                   </View>
+                  <Text style={labelStyle}>Appointment</Text>
+                  <Text style={valueStyle}>{appt.patientName || "Your visit"}</Text>
                   <Text style={labelStyle}>Date/Time</Text>
                   <Text style={valueStyle}>{fmtDateTime(appt.scheduledAt)}</Text>
                   <Text style={labelStyle}>Hospital</Text>
@@ -280,7 +324,7 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
               ))}
             </View>
           ) : (
-            <MessageBanner message="No pending appointments loaded." tone="info" />
+            <MessageBanner message="No upcoming appointments loaded." tone="info" />
           )}
 
           {checkInResp ? (
@@ -289,6 +333,15 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
                 #{checkInResp.queueTicket.ticketNumber}
               </Text>
               <Text style={valueStyle}>{checkInResp.appointment.facilityName || "Current Facility"}</Text>
+            </View>
+          ) : null}
+          {qrQueueTicket ? (
+            <View style={[rowStyle, { marginTop: 8, borderColor: T.teal + "60", backgroundColor: T.teal + "11" }]}>
+              <Text style={[{ fontWeight: "800", fontSize: 28, color: T.teal }]}>
+                #{qrQueueTicket.ticketNumber}
+              </Text>
+              <Text style={valueStyle}>{qrQueueTicket.category || "Queue check-in"}</Text>
+              <Text style={valueStyle}>{qrQueueTicket.triageLevel || "Triage pending"}</Text>
             </View>
           ) : null}
         </Card>
@@ -419,48 +472,70 @@ export function PatientWorkspaceScreen({ deepLinkCheckInPrefill }: PatientWorksp
       {activeTab === "Access Log" ? (
         <Card title="Data Access History">
           <MessageBanner
-            message="Shows who viewed your data, consent grants, and access events."
+            message="Shows who opened your medical record, when they opened it, what area they viewed, and the reason they gave."
             tone="info"
           />
-          {authorizations.length ? (
+          {accessHistory.length ? (
             <View style={{ gap: 10, marginTop: 6 }}>
-              {authorizations.map(entry => (
+              {accessHistory.map(entry => (
                 <View key={entry.id} style={rowStyle}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                     <Text style={[{ fontWeight: "800", color: T.text, fontSize: 13 }]}>
-                      {entry.authorizationType || "ACCESS"}
+                      {entry.viewedResource || entry.viewedArea || "Medical record"}
                     </Text>
-                    <View style={[pw.statusChip, {
-                      backgroundColor: entry.revoked ? "#fef2f2" : T.teal + "22",
-                      borderColor: entry.revoked ? "#fca5a5" : T.teal + "60",
-                    }]}>
-                      <Text style={{ fontSize: 10, fontWeight: "700", color: entry.revoked ? "#dc2626" : T.teal }}>
-                        {entry.revoked ? "Revoked" : "Active"}
-                      </Text>
-                    </View>
+                    <Text style={[{ color: T.textMuted, fontSize: 12 }]}>
+                      {fmtDateTime(entry.accessedAt || undefined)}
+                    </Text>
                   </View>
-                  <Text style={labelStyle}>Viewed / Granted By</Text>
-                  <Text style={valueStyle}>{entry.authorizerName || "N/A"} · {entry.authorizerRole || "N/A"}</Text>
-                  <Text style={labelStyle}>Scope</Text>
-                  <Text style={valueStyle}>{entry.dataAccessScope || "N/A"}</Text>
-                  <Text style={labelStyle}>Date &amp; Time</Text>
-                  <Text style={valueStyle}>{fmtDateTime(entry.grantedAt)}</Text>
-                  {entry.expiresAt ? (
+                  <Text style={labelStyle}>Viewed By</Text>
+                  <Text style={valueStyle}>{entry.viewerFullName || "Unknown viewer"} · {entry.viewerRole || "Unknown role"}</Text>
+                  <Text style={labelStyle}>Area</Text>
+                  <Text style={valueStyle}>{entry.viewedArea || "General chart"}</Text>
+                  <Text style={labelStyle}>Reason</Text>
+                  <Text style={valueStyle}>{entry.reason || entry.detail || "No reason supplied"}</Text>
+                  {entry.accessScope ? (
                     <>
-                      <Text style={labelStyle}>Expires</Text>
-                      <Text style={valueStyle}>{fmtDateTime(entry.expiresAt)}</Text>
+                      <Text style={labelStyle}>Scope</Text>
+                      <Text style={valueStyle}>{entry.accessScope}</Text>
                     </>
                   ) : null}
                 </View>
               ))}
             </View>
           ) : (
-            <MessageBanner message="No access records available yet." tone="info" />
+            <MessageBanner
+              message={
+                accessHistoryUnavailable
+                  ? "Real chart-access history is not available from the backend yet."
+                  : "No chart-access records available yet."
+              }
+              tone="info"
+            />
           )}
+          {authorizations.length ? (
+            <View style={{ gap: 10, marginTop: 14 }}>
+              <Text style={[pw.sectionLabel, { color: T.textMuted }]}>CONSENT AND AUTHORIZATION HISTORY</Text>
+              {authorizations.map(entry => (
+                <View key={entry.id} style={rowStyle}>
+                  <Text style={[{ fontWeight: "800", color: T.text, fontSize: 13 }]}>
+                    {entry.authorizationType || "Authorization"}
+                  </Text>
+                  <Text style={labelStyle}>Granted By</Text>
+                  <Text style={valueStyle}>{entry.authorizerName || "N/A"} · {entry.authorizerRole || "N/A"}</Text>
+                  <Text style={labelStyle}>Scope</Text>
+                  <Text style={valueStyle}>{entry.dataAccessScope || "N/A"}</Text>
+                  <Text style={labelStyle}>Granted At</Text>
+                  <Text style={valueStyle}>{fmtDateTime(entry.grantedAt)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </Card>
       ) : null}
 
       {/* ── VISIT NOTES ── */}
+      {activeTab === "Messages" ? <PatientMessagesScreen /> : null}
+
       {activeTab === "Visit Notes" ? (
         <Card title="Visit Notes & Summaries">
           {notes.length ? (

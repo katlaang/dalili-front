@@ -5,9 +5,9 @@ import { useSession } from "../../state/session";
 import { AdminScreen } from "./AdminScreen";
 import { AppointmentsScreen } from "./AppointmentsScreen";
 import { EncountersScreen } from "./EncountersScreen";
+import { MessagesScreen } from "./MessagesScreen";
 import { OverviewScreen } from "./OverviewScreen";
 import { PatientAccessScreen } from "./PatientAccessScreen";
-import { PatientMessagingScreen } from "./PatientMessagingScreen";
 import { PatientsScreen } from "./PatientsScreen";
 import { ProfileScreen } from "./ProfileScreen";
 import { QueueScreen } from "./QueueScreen";
@@ -54,13 +54,13 @@ function tabsForRole(role: string | null): StaffTab[] {
   const normalized = (role || "").toUpperCase();
   switch (normalized) {
     case "SUPER_ADMIN":
-      return ["profile", "admin", "users"];
+      return [...ALL_TABS];
     case "ADMIN":
-      return ["profile", "admin", "users"];
+      return [...ALL_TABS];
     case "RECEPTIONIST":
       return ["profile", "appointments", "queue"];
     case "NURSE":
-      return ["profile", "overview", "patients", "appointments", "queue", "triage"];
+      return ["profile", "overview", "patients", "appointments", "queue", "triage", "patient_access", "messages", "referrals"];
     case "PHYSICIAN":
       return [
         "profile",
@@ -106,6 +106,8 @@ export function StaffWorkspaceScreen({
   const [activeEncounterId, setActiveEncounterId] = useState("");
   const [messagingPatientId, setMessagingPatientId] = useState<string | null>(null);
   const [messagingPatientName, setMessagingPatientName] = useState("");
+  const [patientAccessPatientId, setPatientAccessPatientId] = useState<string | null>(null);
+  const [patientAccessPatientName, setPatientAccessPatientName] = useState("");
 
   const isDesktop = width >= 980;
   const canMessageFromWorkspace = availableTabs.includes("messages");
@@ -127,6 +129,8 @@ export function StaffWorkspaceScreen({
   const consumePrefill = useCallback(() => {
     setMessagingPatientId(null);
     setMessagingPatientName("");
+    setPatientAccessPatientId(null);
+    setPatientAccessPatientName("");
   }, []);
 
   const handleOpenMessaging = useCallback((patientId: string, name: string) => {
@@ -135,13 +139,24 @@ export function StaffWorkspaceScreen({
     setTab("messages");
   }, []);
 
+  const handleOpenPatientAccess = useCallback((patientId: string, name: string) => {
+    setPatientAccessPatientId(patientId);
+    setPatientAccessPatientName(name);
+    setTab("patient_access");
+  }, []);
+
   const content = useMemo(() => {
     switch (tab) {
       case "profile":
         return <ProfileScreen onOpenChangePassword={onOpenChangePassword} />;
 
       case "patients":
-        return <PatientsScreen />;
+        return (
+          <PatientsScreen
+            onOpenMessaging={canMessageFromWorkspace ? handleOpenMessaging : undefined}
+            onOpenPatientAccess={availableTabs.includes("patient_access") ? handleOpenPatientAccess : undefined}
+          />
+        );
 
       case "admin":
         return <AdminScreen />;
@@ -212,15 +227,15 @@ export function StaffWorkspaceScreen({
       case "patient_access":
         return (
           <PatientAccessScreen
-            prefillPatientId={messagingPatientId || undefined}
-            prefillPatientName={messagingPatientName || undefined}
+            prefillPatientId={patientAccessPatientId || undefined}
+            prefillPatientName={patientAccessPatientName || undefined}
             onPrefillConsumed={consumePrefill}
           />
         );
 
       case "messages":
         return (
-          <PatientMessagingScreen
+          <MessagesScreen
             prefillPatientId={messagingPatientId || undefined}
             prefillPatientName={messagingPatientName || undefined}
             onPrefillConsumed={consumePrefill}
@@ -250,9 +265,12 @@ export function StaffWorkspaceScreen({
     canMessageFromWorkspace,
     consumePrefill,
     handleOpenMessaging,
+    handleOpenPatientAccess,
     messagingPatientId,
     messagingPatientName,
     onOpenChangePassword,
+    patientAccessPatientId,
+    patientAccessPatientName,
     tab,
   ]);
 

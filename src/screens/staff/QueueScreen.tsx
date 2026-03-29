@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { facilityApi, patientApi, queueApi } from "../../api/services";
+import { clinicalPortalApi, facilityApi, patientApi, queueApi } from "../../api/services";
 import type { QueueTicket } from "../../api/types";
 import { queueCategoryOptions, triageLevelOptions } from "../../config/options";
 import {
+  AccessReasonModal,
   ActionButton,
   Card,
   ChoiceChips,
@@ -133,6 +134,7 @@ function PatientProfileModal({ ticket, onClose, onTriage, onEncounter, onMessage
     isPregnant: ticket.isPregnant,
     newborn: ticket.newborn,
     elderly: ticket.elderly,
+    manualRedFlag: ticket.manualRedFlag,
     vulnerabilityIndicators: ticket.vulnerabilityIndicators,
   });
   const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
@@ -315,9 +317,16 @@ function QueueRow({
     isPregnant: ticket.isPregnant,
     newborn: ticket.newborn,
     elderly: ticket.elderly,
+    manualRedFlag: ticket.manualRedFlag,
     vulnerabilityIndicators: ticket.vulnerabilityIndicators,
   });
   const vulnerabilityAccent = getPrimaryVulnerabilityColor(vulnerabilityMarkers);
+  const normalizedRole = (role || "").toUpperCase();
+  const canViewProfile =
+    normalizedRole === "NURSE" ||
+    normalizedRole === "PHYSICIAN" ||
+    normalizedRole === "ADMIN" ||
+    normalizedRole === "SUPER_ADMIN";
 
   return (
     <View style={[qss.row, {
@@ -372,7 +381,7 @@ function QueueRow({
       {/* Right: wait + action */}
       <View style={qss.rowRight}>
         <Text style={[qss.rowWait, { color: T.textMuted }]}>{waitLabel(ticket.waitTimeMinutes)}</Text>
-        {(role === "NURSE" || role === "PHYSICIAN") ? (
+        {canViewProfile ? (
           <Pressable onPress={() => onView(ticket)}
             style={[qss.viewBtn, { backgroundColor: T.teal }]}>
             <Text style={qss.viewBtnText}>View →</Text>
@@ -388,10 +397,12 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   const { apiContext, role } = useSession();
   const { theme: T } = useTheme();
 
-  const isNurse        = role === "NURSE";
-  const isPhysician    = role === "PHYSICIAN";
-  const isReceptionist = role === "RECEPTIONIST";
-  const canClinical    = isNurse || isPhysician;
+  const normalizedRole = (role || "").toUpperCase();
+  const isNurse = normalizedRole === "NURSE";
+  const isPhysician = normalizedRole === "PHYSICIAN";
+  const isReceptionist = normalizedRole === "RECEPTIONIST";
+  const hasPlatformVisibility = normalizedRole === "ADMIN" || normalizedRole === "SUPER_ADMIN";
+  const canClinical = isNurse || isPhysician || hasPlatformVisibility;
 
   // Which queue does this role see by default?
   const defaultQueueView = isPhysician ? "consultation" : "triage";
@@ -399,6 +410,8 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   const [rows,      setRows]              = useState<QueueTicket[]>([]);
   const [stats,     setStats]             = useState<unknown>(null);
   const [selected,  setSelected]          = useState<QueueTicket | null>(null);
+  const [pendingAccessTicket, setPendingAccessTicket] = useState<QueueTicket | null>(null);
+  const [accessModalVisible, setAccessModalVisible] = useState(false);
   const [message,   setMessage]           = useState<string | null>(null);
   const [tone,      setTone]              = useState<"success" | "error">("success");
 
@@ -433,7 +446,7 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
   // Physician only ever sees the doctor queue — don't offer other views
   const availableViews = useMemo(() => {
     if (isPhysician) return [{ key: "consultation", label: "Doctor Queue" }];
-    if (isNurse)     return [
+    if (isNurse || hasPlatformVisibility)     return [
       { key: "triage",        label: "Triage Queue"  },
       { key: "consultation",  label: "Doctor Queue"  },
       { key: "waiting",       label: "All Waiting"   },
@@ -444,7 +457,7 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
       { key: "consultation", label: "Doctor Queue"  },
       { key: "today",        label: "Today"         },
     ];
-  }, [isPhysician, isNurse]);
+  }, [hasPlatformVisibility, isPhysician, isNurse]);
 
   useEffect(() => {
     const valid = availableViews.some(v => v.key === queueView);
@@ -456,13 +469,13 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
     try {
       const data = await queueApi.getQueue(apiContext, queueView as any);
       setRows(data);
-      ok(`Loaded ${data.length} ticket(s)`);
+      ok(`Showing ${data.length} ticket(s)`);
     } catch (e) { err(e); }
   };
 
   const loadStats = async () => {
     if (!apiContext) return;
-    try { setStats(await queueApi.getStats(apiContext)); ok("Stats loaded"); }
+    try { setStats(await queueApi.getStats(apiContext)); ok("Queue stats updated"); }
     catch (e) { err(e); }
   };
 
@@ -531,8 +544,28 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
 
   // Patient profile row click
   const handleRowView = (ticket: QueueTicket) => {
-    setTicketId(ticket.id);
-    setSelected(ticket);
+    setPendingAccessTicket(ticket);
+    setAccessModalVisible(true);
+  };
+
+  const confirmAccess = async (reason: string, detail?: string) => {
+    if (!apiContext || !pendingAccessTicket) return;
+    try {
+      await clinicalPortalApi.recordChartAccess(apiContext, pendingAccessTicket.patientId, {
+        reason,
+        detail: detail || null,
+        viewedArea: "Queue",
+        viewedResource: "Patient Profile",
+        accessScope: "TRIAGE_PROFILE",
+      });
+      setTicketId(pendingAccessTicket.id);
+      setSelected(pendingAccessTicket);
+      setAccessModalVisible(false);
+      setPendingAccessTicket(null);
+      ok(`Access logged for ${pendingAccessTicket.patientName || pendingAccessTicket.patientId}`);
+    } catch (e) {
+      err(e);
+    }
   };
 
   const handleProfileTriage = (id: string) => {
@@ -553,14 +586,27 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
 
   return (
     <>
+      <AccessReasonModal
+        visible={accessModalVisible}
+        title="Open Patient Profile"
+        patientLabel={pendingAccessTicket ? `${pendingAccessTicket.patientName || pendingAccessTicket.patientId} (${pendingAccessTicket.workflowNumber || pendingAccessTicket.ticketNumber || pendingAccessTicket.id.slice(0, 8)})` : undefined}
+        resourceLabel="Queue Profile"
+        confirmLabel="Log Access and Open"
+        onCancel={() => {
+          setAccessModalVisible(false);
+          setPendingAccessTicket(null);
+        }}
+        onConfirm={({ reason, detail }) => void confirmAccess(reason, detail)}
+      />
+
       {/* Patient profile modal */}
       {selected ? (
         <PatientProfileModal
           ticket={selected}
           onClose={() => setSelected(null)}
-          onTriage={isNurse && !selected.triaged ? handleProfileTriage : undefined}
-          onEncounter={(isNurse && selected.triaged) || isPhysician ? handleProfileEncounter : undefined}
-          onMessage={(isNurse || isPhysician) && onOpenMessaging ? onOpenMessaging : undefined}
+          onTriage={(isNurse || hasPlatformVisibility) && !selected.triaged ? handleProfileTriage : undefined}
+          onEncounter={(isNurse && selected.triaged) || isPhysician || hasPlatformVisibility ? handleProfileEncounter : undefined}
+          onMessage={canClinical && onOpenMessaging ? onOpenMessaging : undefined}
           scheme={T.scheme}
           T={T as any}
         />
@@ -651,7 +697,7 @@ export function QueueScreen({ onMoveToTriage, onMoveToEncounter, onOpenMessaging
       </Card>
 
       {/* Ticket Actions */}
-      {!canClinical ? (
+      {(!canClinical || hasPlatformVisibility) ? (
       <Card title="Ticket Actions">
         <InputField label="Selected Ticket" value={ticketId} onChangeText={setTicketId} />
         <InlineActions>

@@ -58,7 +58,7 @@ export const triagePalette = {
   ORANGE: { bgDark:"#7c2d12", bgLight:"#fff7ed", border:"#f97316", borderLight:"#fdba74", textDark:"#fdba74", textLight:"#9a3412", dot:"#f97316", label:"URGENT"       },
   YELLOW: { bgDark:"#713f12", bgLight:"#fefce8", border:"#eab308", borderLight:"#fde047", textDark:"#fde047", textLight:"#854d0e", dot:"#eab308", label:"LESS URGENT"  },
   GREEN:  { bgDark:"#14532d", bgLight:"#f0fdf4", border:"#22c55e", borderLight:"#86efac", textDark:"#86efac", textLight:"#166534", dot:"#22c55e", label:"NON-URGENT"   },
-  BLUE:   { bgDark:"#1e3a5f", bgLight:"#eff6ff", border:"#3b82f6", borderLight:"#93c5fd", textDark:"#93c5fd", textLight:"#1e40af", dot:"#3b82f6", label:"EXPECTANT"    },
+  BLUE:   { bgDark:"#1e3a5f", bgLight:"#eff6ff", border:"#3b82f6", borderLight:"#93c5fd", textDark:"#93c5fd", textLight:"#1e40af", dot:"#3b82f6", label:"DEFERRED"     },
 } as const;
 
 export const vulnerabilityPalette = {

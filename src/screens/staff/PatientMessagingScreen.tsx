@@ -81,7 +81,7 @@ export function PatientMessagingScreen({
       const patient = await resolvePatientRecord();
       const list = await clinicalPortalApi.getInbox(apiContext, patient.id);
       setMessages(list);
-      showSuccess(`Loaded ${list.length} message(s) for ${patient.fullName}`);
+      showSuccess(`Showing ${list.length} message(s) for ${patient.fullName}`);
     } catch (error) {
       showError(error);
     }
